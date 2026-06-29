@@ -32,11 +32,6 @@ fn main() -> anyhow::Result<()> {
                 &sdk_src.join("envd/rest_gen.rs"),
             )?;
             println!("xtask codegen: wrote envd REST types");
-            openapi::generate_json_schema_types(
-                &spec_dir.join("mcp-server.json"),
-                &sdk_src.join("sandbox/mcp_gen.rs"),
-            )?;
-            println!("xtask codegen: wrote MCP server types");
             Ok(())
         }
         other => Err(anyhow::anyhow!(

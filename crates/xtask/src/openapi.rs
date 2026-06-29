@@ -36,17 +36,3 @@ pub fn generate_schema_types(spec_path: &Path, out_path: &Path) -> anyhow::Resul
     write_generated(out_path, &type_space.to_stream().to_string())?;
     Ok(())
 }
-
-/// Generate Rust types from a standalone JSON Schema document (e.g. the MCP
-/// server schema) — no OpenAPI `components` wrapper.
-pub fn generate_json_schema_types(schema_path: &Path, out_path: &Path) -> anyhow::Result<()> {
-    let raw = std::fs::read_to_string(schema_path)?;
-    let root: schemars::schema::RootSchema = serde_json::from_str(&raw)?;
-
-    let mut type_space = TypeSpace::new(&TypeSpaceSettings::default());
-    // Root schema may carry a top-level type plus `$defs`/`definitions`.
-    type_space.add_root_schema(root)?;
-
-    write_generated(out_path, &type_space.to_stream().to_string())?;
-    Ok(())
-}
