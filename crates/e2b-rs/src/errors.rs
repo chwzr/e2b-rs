@@ -69,6 +69,9 @@ pub enum Error {
         /// Optional error string reported by envd.
         error: Option<String>,
     },
+    /// Underlying HTTP transport error (connection, TLS, timeout at the wire level).
+    #[error(transparent)]
+    Transport(#[from] reqwest::Error),
     /// Internal invariant violation. Used instead of panicking in "impossible"
     /// cases so the library never aborts the host process.
     #[error("internal error: {0}")]
@@ -173,6 +176,17 @@ mod tests {
         assert!(Error::Build("a".into()).is_build());
         assert!(Error::FileUpload("a".into()).is_build());
         assert!(!Error::Sandbox("a".into()).is_build());
+    }
+
+    #[tokio::test]
+    async fn reqwest_error_converts_via_from() {
+        // A connection to an unroutable address yields a reqwest::Error,
+        // which must convert into Error::Transport via `?`/`#[from]`.
+        fn try_it(e: reqwest::Error) -> Error {
+            Error::from(e)
+        }
+        let err = reqwest::get("http://127.0.0.1:1/nope").await.unwrap_err();
+        assert!(matches!(try_it(err), Error::Transport(_)));
     }
 
     #[test]

@@ -1,11 +1,11 @@
 //! Control-plane REST API client and generated schema types. The `ApiClient`
 //! and per-endpoint calls land in Plan 2b.
 
-pub(crate) mod r#gen;
+pub(crate) mod schema;
 
 #[cfg(test)]
 mod tests {
-    use super::r#gen as api_gen;
+    use super::schema as api_gen;
 
     #[test]
     fn control_plane_error_round_trips() {

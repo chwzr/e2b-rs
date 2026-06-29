@@ -1,11 +1,11 @@
 //! Volume content client and generated wire types. Client wiring lands in a
 //! later milestone.
 
-pub(crate) mod r#gen;
+pub(crate) mod schema;
 
 #[cfg(test)]
 mod tests {
-    use super::r#gen as volume_gen;
+    use super::schema as volume_gen;
 
     #[test]
     fn volume_entry_stat_round_trips() {

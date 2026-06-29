@@ -19,12 +19,12 @@ fn main() -> anyhow::Result<()> {
             println!("xtask codegen: wrote envd proto modules");
             openapi::generate_schema_types(
                 &spec_dir.join("openapi-volumecontent.yml"),
-                &sdk_src.join("volume/gen.rs"),
+                &sdk_src.join("volume/schema.rs"),
             )?;
             println!("xtask codegen: wrote volume content types");
             openapi::generate_schema_types(
                 &spec_dir.join("openapi.yml"),
-                &sdk_src.join("api/gen.rs"),
+                &sdk_src.join("api/schema.rs"),
             )?;
             println!("xtask codegen: wrote control-plane API types");
             openapi::generate_schema_types(

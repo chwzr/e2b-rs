@@ -28,3 +28,10 @@ pbjson-types = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 regress = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+reqwest = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = { workspace = true }
