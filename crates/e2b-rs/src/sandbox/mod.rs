@@ -3,3 +3,6 @@
 
 pub(crate) mod mcp_gen;
 pub mod signature;
+pub mod types;
+
+pub use types::{SandboxInfo, SandboxState};
