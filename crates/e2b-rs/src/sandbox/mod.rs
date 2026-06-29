@@ -1,0 +1,4 @@
+//! Sandbox APIs. The full sandbox lifecycle and I/O modules arrive in later
+//! milestones; this milestone provides URL signatures.
+
+pub mod signature;
