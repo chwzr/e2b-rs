@@ -3,6 +3,7 @@
 //! Generation modules are added in later tasks; this skeleton dispatches the
 //! `codegen` subcommand and fails loudly on unknown input.
 
+mod openapi;
 mod proto;
 mod vendor;
 
@@ -16,6 +17,11 @@ fn main() -> anyhow::Result<()> {
             let sdk_src = std::path::PathBuf::from("crates/e2b-rs/src");
             proto::generate(&spec_dir, &sdk_src)?;
             println!("xtask codegen: wrote envd proto modules");
+            openapi::generate_schema_types(
+                &spec_dir.join("openapi-volumecontent.yml"),
+                &sdk_src.join("volume/gen.rs"),
+            )?;
+            println!("xtask codegen: wrote volume content types");
             Ok(())
         }
         other => Err(anyhow::anyhow!(
