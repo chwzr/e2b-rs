@@ -39,7 +39,20 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 | `api/index.ts` per-endpoint calls (createSandbox, …) | _(Plan 3+, built on `ApiClient::request`)_ | ⬜ |
 | `envd/api.ts` `/files` read/write | _(Plan 3 Filesystem — multipart/octet-stream/gzip)_ | ⬜ |
 
-Connect-over-JSON RPC client (filesystem/process/pty) is Plan 2b-ii.
+## Connect-over-JSON RPC client (Plan 2b-ii)
+
+| JS (`src/...`) | Rust (`e2b_rs::...`) | Status |
+|---|---|---|
+| `envd/versions.ts` | `envd::versions` (constants + `version_gte`) | ✅ |
+| `envd/rpc.ts` `Code`/`DEFAULT_ERROR_MAP` | `connect::error` (`Code`, `parse_connect_error`, `map_code_to_error`) | ✅ |
+| Connect envelope framing | `connect::envelope` (`encode_envelope`, `EnvelopeDecoder`) | ✅ |
+| `createConnectTransport` unary | `connect::client::ConnectClient::unary` | ✅ |
+| `createConnectTransport` server-streaming | `ConnectClient::server_stream` (→ `impl Stream`) | ✅ |
+| `authenticationHeader` | `connect::client::auth_header` (Basic, version-gated) | ✅ |
+| `handleRpcErrorWithHealthCheck` | `connect::client::handle_rpc_error` | ✅ |
+| Filesystem/Process/Pty RPC wrappers | _(Plan 3 — built on `ConnectClient` + the proto types)_ | ⬜ |
+
+> Deferred parity detail: the JS transport sets a `Keepalive-Ping-Interval` header on streaming requests (`KEEPALIVE_PING_HEADER`/`KEEPALIVE_PING_INTERVAL_SEC`, already defined in `connection_config`). The stream decoder works without it (it's a server-side connection-liveness hint); add it to `server_stream`'s request headers in Plan 3 once confirmed against `sandbox/index.ts`.
 
 ## Sandbox & I/O (Plan 3) · Git & Volume (Plan 4) · Template (Plan 5)
 

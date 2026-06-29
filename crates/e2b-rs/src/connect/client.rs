@@ -207,6 +207,27 @@ impl ConnectClient {
     }
 }
 
+use crate::errors::format_sandbox_timeout_error;
+
+/// Refine an RPC error using a sandbox health probe. If `err` is a transport
+/// error and the probe reports the sandbox responded unhealthy (`Some(false)`,
+/// i.e. confirmed killed/timed-out), convert it to a sandbox-timeout
+/// [`Error::Timeout`]; otherwise (transient `None`, or a non-transport error)
+/// return `err` unchanged. Mirrors `handleRpcErrorWithHealthCheck`.
+#[allow(dead_code)] // consumed by Plan 3
+pub(crate) async fn handle_rpc_error<F, Fut>(err: Error, check_health: F) -> Error
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Option<bool>>,
+{
+    if matches!(err, Error::Transport(_))
+        && let Some(false) = check_health().await
+    {
+        return format_sandbox_timeout_error("the sandbox is no longer running");
+    }
+    err
+}
+
 /// Parse a Connect end-of-stream frame; returns an [`Error`] if it carries one.
 fn end_stream_error(data: &[u8]) -> Option<Error> {
     #[derive(serde::Deserialize)]
@@ -339,6 +360,32 @@ mod tests {
             ns.push(item.expect("frame ok")["n"].as_i64().unwrap_or(0));
         }
         assert_eq!(ns, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn handle_rpc_error_converts_transport_error_when_sandbox_dead() {
+        // A transport error + health probe says "responded unhealthy" (Some(false)) → Timeout.
+        let transport_err = {
+            let e = reqwest::get("http://127.0.0.1:1/x").await.unwrap_err();
+            crate::errors::Error::Transport(e)
+        };
+        let out = handle_rpc_error(transport_err, || async { Some(false) }).await;
+        assert!(matches!(out, crate::errors::Error::Timeout(_)));
+
+        // Same transport error but health unknown (None) → unchanged.
+        let transport_err2 = {
+            let e = reqwest::get("http://127.0.0.1:1/x").await.unwrap_err();
+            crate::errors::Error::Transport(e)
+        };
+        let out2 = handle_rpc_error(transport_err2, || async { None }).await;
+        assert!(matches!(out2, crate::errors::Error::Transport(_)));
+
+        // A non-transport error is returned unchanged without probing.
+        let out3 = handle_rpc_error(crate::errors::Error::NotFound("x".into()), || async {
+            panic!("should not probe");
+        })
+        .await;
+        assert!(matches!(out3, crate::errors::Error::NotFound(_)));
     }
 
     #[tokio::test]
