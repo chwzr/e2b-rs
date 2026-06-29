@@ -17,3 +17,9 @@ pub use errors::{Error, Result};
 pub mod logs;
 
 pub use logs::{Logger, NoopLogger};
+
+pub mod connection_config;
+
+pub use connection_config::{
+    ConnectionConfig, ConnectionConfigOpts, DEFAULT_SANDBOX_TIMEOUT_MS, REQUEST_TIMEOUT_MS,
+};
