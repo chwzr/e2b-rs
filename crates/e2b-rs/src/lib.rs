@@ -20,6 +20,8 @@
 //! assert_eq!(config.domain, "e2b.app");
 //! ```
 
+mod codegen_smoke;
+
 mod utils;
 
 pub mod errors;

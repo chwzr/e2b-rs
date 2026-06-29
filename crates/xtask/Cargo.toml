@@ -1,0 +1,22 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+protox = "0.9"
+prost = "0.14"
+prost-build = "0.14"
+pbjson-build = "0.9"
+typify = "0.4"
+schemars = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+proc-macro2 = "1"
