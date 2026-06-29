@@ -44,7 +44,6 @@ pub struct SandboxInfo {
 
 impl SandboxInfo {
     /// Build a public [`SandboxInfo`] from the generated control-plane detail.
-    #[allow(dead_code)] // used in later milestones; no caller yet in this crate
     pub(crate) fn from_detail(d: api_schema::SandboxDetail) -> SandboxInfo {
         let state = match d.state {
             api_schema::SandboxState::Running => SandboxState::Running,

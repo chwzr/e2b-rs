@@ -5,10 +5,10 @@ pub(crate) mod api;
 pub(crate) mod mcp_gen;
 pub mod opts;
 #[allow(clippy::module_inception)] // `sandbox.rs` inside the `sandbox` module is intentional
-pub mod sandbox;
+pub(crate) mod sandbox;
 pub mod signature;
 pub mod types;
 
 pub use opts::{SandboxConnectOpts, SandboxCreateOpts, SandboxListOpts};
-pub use sandbox::Sandbox;
+pub use sandbox::{Sandbox, SandboxConnectBuilder, SandboxCreateBuilder};
 pub use types::{SandboxInfo, SandboxState};

@@ -70,10 +70,9 @@ impl Sandbox {
     pub fn get_host(&self, port: u16) -> String {
         let domain = self
             .sandbox_domain
-            .clone()
-            .unwrap_or_else(|| self.config.domain.clone());
-        self.config
-            .get_host(&self.sandbox_id, port, Some(domain.as_str()))
+            .as_deref()
+            .unwrap_or(&self.config.domain);
+        self.config.get_host(&self.sandbox_id, port, Some(domain))
     }
 
     /// Kill the sandbox. Returns `false` if it was already gone.
