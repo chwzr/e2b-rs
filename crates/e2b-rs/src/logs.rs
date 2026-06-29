@@ -5,6 +5,8 @@
 /// All methods default to no-ops, so implementors override only the levels
 /// they care about. Pass an `Arc<dyn Logger>` through the connection options.
 ///
+/// # Examples
+///
 /// ```
 /// use e2b_rs::Logger;
 /// use std::sync::Mutex;

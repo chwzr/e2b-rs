@@ -7,6 +7,18 @@
 //! layer**: configuration, errors, logging, pagination state, and URL
 //! signatures. Sandbox creation, command execution, and the filesystem API
 //! arrive in later milestones.
+//!
+//! ## Resolving configuration
+//!
+//! ```
+//! use e2b_rs::{ConnectionConfig, ConnectionConfigOpts};
+//!
+//! let config = ConnectionConfig::new(ConnectionConfigOpts {
+//!     domain: Some("e2b.app".to_string()),
+//!     ..Default::default()
+//! });
+//! assert_eq!(config.api_url, "https://api.e2b.app");
+//! ```
 
 mod utils;
 
