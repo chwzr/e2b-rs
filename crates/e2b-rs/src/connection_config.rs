@@ -169,7 +169,12 @@ impl ConnectionConfig {
 
     /// Base URL for reaching a sandbox: the override if set, the stable
     /// `sandbox.<domain>` host for supported domains, otherwise the direct host.
-    pub fn get_sandbox_url(&self, sandbox_id: &str, sandbox_domain: &str, envd_port: u16) -> String {
+    pub fn get_sandbox_url(
+        &self,
+        sandbox_id: &str,
+        sandbox_domain: &str,
+        envd_port: u16,
+    ) -> String {
         if let Some(url) = &self.sandbox_url {
             return url.clone();
         }
@@ -228,12 +233,18 @@ mod tests {
         assert!(c.validate_api_key);
         assert_eq!(c.request_timeout_ms, REQUEST_TIMEOUT_MS);
         assert_eq!(c.api_key, None);
-        assert_eq!(c.headers.get("User-Agent").map(String::as_str), Some("e2b-rs/0.1.0"));
+        assert_eq!(
+            c.headers.get("User-Agent").map(String::as_str),
+            Some("e2b-rs/0.1.0")
+        );
     }
 
     #[test]
     fn env_domain_flows_into_api_url() {
-        let c = cfg(ConnectionConfigOpts::default(), &[("E2B_DOMAIN", "example.com")]);
+        let c = cfg(
+            ConnectionConfigOpts::default(),
+            &[("E2B_DOMAIN", "example.com")],
+        );
         assert_eq!(c.domain, "example.com");
         assert_eq!(c.api_url, "https://api.example.com");
     }
@@ -268,28 +279,46 @@ mod tests {
 
     #[test]
     fn validate_api_key_env_false_disables() {
-        let c = cfg(ConnectionConfigOpts::default(), &[("E2B_VALIDATE_API_KEY", "false")]);
+        let c = cfg(
+            ConnectionConfigOpts::default(),
+            &[("E2B_VALIDATE_API_KEY", "false")],
+        );
         assert!(!c.validate_api_key);
     }
 
     #[test]
     fn get_host_production_and_debug() {
         let prod = cfg(ConnectionConfigOpts::default(), &[]);
-        assert_eq!(prod.get_host("sb1", 49983, Some("e2b.app")), "49983-sb1.e2b.app");
+        assert_eq!(
+            prod.get_host("sb1", 49983, Some("e2b.app")),
+            "49983-sb1.e2b.app"
+        );
 
         let dbg = cfg(ConnectionConfigOpts::default(), &[("E2B_DEBUG", "true")]);
-        assert_eq!(dbg.get_host("sb1", 49983, Some("e2b.app")), "localhost:49983");
+        assert_eq!(
+            dbg.get_host("sb1", 49983, Some("e2b.app")),
+            "localhost:49983"
+        );
     }
 
     #[test]
     fn sandbox_url_stable_vs_direct() {
         let c = cfg(ConnectionConfigOpts::default(), &[]);
         // Supported domain → stable host.
-        assert_eq!(c.get_sandbox_url("sb1", "e2b.app", 49983), "https://sandbox.e2b.app");
+        assert_eq!(
+            c.get_sandbox_url("sb1", "e2b.app", 49983),
+            "https://sandbox.e2b.app"
+        );
         // Unsupported domain → direct host.
-        assert_eq!(c.get_sandbox_url("sb1", "custom.io", 49983), "https://49983-sb1.custom.io");
+        assert_eq!(
+            c.get_sandbox_url("sb1", "custom.io", 49983),
+            "https://49983-sb1.custom.io"
+        );
         // Direct URL never uses the stable host, even for supported domains.
-        assert_eq!(c.get_sandbox_direct_url("sb1", "e2b.app", 49983), "https://49983-sb1.e2b.app");
+        assert_eq!(
+            c.get_sandbox_direct_url("sb1", "e2b.app", 49983),
+            "https://49983-sb1.e2b.app"
+        );
     }
 
     #[test]
@@ -299,9 +328,15 @@ mod tests {
             ..Default::default()
         };
         let c = cfg(opts, &[]);
-        assert_eq!(c.get_sandbox_url("sb1", "e2b.app", 49983), "https://my.proxy");
+        assert_eq!(
+            c.get_sandbox_url("sb1", "e2b.app", 49983),
+            "https://my.proxy"
+        );
 
         let dbg = cfg(ConnectionConfigOpts::default(), &[("E2B_DEBUG", "true")]);
-        assert_eq!(dbg.get_sandbox_url("sb1", "e2b.app", 49983), "http://localhost:49983");
+        assert_eq!(
+            dbg.get_sandbox_url("sb1", "e2b.app", 49983),
+            "http://localhost:49983"
+        );
     }
 }

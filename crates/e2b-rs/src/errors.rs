@@ -127,11 +127,20 @@ mod tests {
 
     #[test]
     fn from_status_maps_known_codes() {
-        assert!(matches!(Error::from_status(400, "x"), Error::InvalidArgument(_)));
-        assert!(matches!(Error::from_status(401, "x"), Error::Authentication(_)));
+        assert!(matches!(
+            Error::from_status(400, "x"),
+            Error::InvalidArgument(_)
+        ));
+        assert!(matches!(
+            Error::from_status(401, "x"),
+            Error::Authentication(_)
+        ));
         assert!(matches!(Error::from_status(404, "x"), Error::NotFound(_)));
         assert!(matches!(Error::from_status(429, "x"), Error::RateLimit(_)));
-        assert!(matches!(Error::from_status(507, "x"), Error::NotEnoughSpace(_)));
+        assert!(matches!(
+            Error::from_status(507, "x"),
+            Error::NotEnoughSpace(_)
+        ));
         assert!(matches!(Error::from_status(500, "x"), Error::Sandbox(_)));
     }
 

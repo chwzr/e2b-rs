@@ -26,7 +26,7 @@ pub use connection_config::{
 
 pub mod sandbox;
 
-pub use sandbox::signature::{get_signature, get_signature_now, Signature, SignatureOperation};
+pub use sandbox::signature::{Signature, SignatureOperation, get_signature, get_signature_now};
 
 pub mod paginator;
 

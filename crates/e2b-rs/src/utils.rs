@@ -1,6 +1,6 @@
 //! Internal utility functions ported from the JS SDK's `utils.ts`.
 
-use base64::prelude::{Engine as _, BASE64_STANDARD};
+use base64::prelude::{BASE64_STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
 
 /// SHA-256 of `data`, encoded as standard base64 (with `=` padding), matching
@@ -58,8 +58,14 @@ mod tests {
     #[test]
     fn sha256_base64_known_vectors() {
         // Standard test vectors for SHA-256, base64-encoded with padding.
-        assert_eq!(sha256_base64(""), "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=");
-        assert_eq!(sha256_base64("abc"), "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=");
+        assert_eq!(
+            sha256_base64(""),
+            "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+        );
+        assert_eq!(
+            sha256_base64("abc"),
+            "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0="
+        );
     }
 
     #[test]

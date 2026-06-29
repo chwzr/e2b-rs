@@ -112,7 +112,8 @@ mod tests {
 
     #[test]
     fn unexpiring_signature_matches_assembly() {
-        let sig = get_signature("/f", SignatureOperation::Read, None, None, Some("tok"), 0).unwrap();
+        let sig =
+            get_signature("/f", SignatureOperation::Read, None, None, Some("tok"), 0).unwrap();
         let expected_hash = sha256_base64("/f:read::tok");
         let expected = format!("v1_{}", expected_hash.trim_end_matches('='));
         assert_eq!(sig.signature, expected);
@@ -134,6 +135,9 @@ mod tests {
         .unwrap();
         assert_eq!(sig.expiration, Some(1100));
         let expected_hash = sha256_base64("/f:write:alice:tok:1100");
-        assert_eq!(sig.signature, format!("v1_{}", expected_hash.trim_end_matches('=')));
+        assert_eq!(
+            sig.signature,
+            format!("v1_{}", expected_hash.trim_end_matches('='))
+        );
     }
 }

@@ -73,7 +73,10 @@ mod tests {
         c.info("hello");
         c.error("boom");
         let msgs = c.msgs.lock().unwrap();
-        assert_eq!(&*msgs, &["info:hello".to_string(), "error:boom".to_string()]);
+        assert_eq!(
+            &*msgs,
+            &["info:hello".to_string(), "error:boom".to_string()]
+        );
     }
 
     #[test]
