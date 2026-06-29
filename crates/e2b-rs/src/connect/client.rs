@@ -39,9 +39,14 @@ pub(crate) struct ConnectClientOpts {
     pub proxy: Option<String>,
 }
 
-/// The `Authorization: Basic base64("{user}:")` header, version-gated by
-/// `ENVD_DEFAULT_USER`. For envd < 0.4.0 (no default-user support) returns
-/// `None` unless an explicit user is given. Mirrors `authenticationHeader`.
+/// Build the `Authorization: Basic base64("{user}:")` header, version-gated by
+/// `ENVD_DEFAULT_USER` (0.4.0). Mirrors `authenticationHeader` from the JS SDK:
+///
+/// - Explicit `user` → always sends `Basic base64("{user}:")`.
+/// - `user == None`, envd **< 0.4.0** → sends `Basic base64("user:")` because
+///   old envd has no server-side default user and the client must specify one.
+/// - `user == None`, envd **>= 0.4.0** → returns `None` (no header); the server
+///   applies the default user itself.
 #[allow(dead_code)] // used by Plan 3
 pub(crate) fn auth_header(
     envd_version: &str,
@@ -49,8 +54,8 @@ pub(crate) fn auth_header(
 ) -> Option<(HeaderName, HeaderValue)> {
     let username = match (user, version_gte(envd_version, ENVD_DEFAULT_USER)) {
         (Some(u), _) => u,
-        (None, true) => DEFAULT_USER,
-        (None, false) => return None,
+        (None, false) => DEFAULT_USER, // envd < 0.4.0 lacks the server default → send "user"
+        (None, true) => return None,   // envd >= 0.4.0 → rely on the server default (no header)
     };
     let value = format!("Basic {}", BASE64_STANDARD.encode(format!("{username}:")));
     let header = HeaderValue::from_str(&value).ok()?;
@@ -88,7 +93,9 @@ impl ConnectClient {
             headers.insert(HeaderName::from_static("x-access-token"), v);
         }
 
-        let mut builder = reqwest::Client::builder().default_headers(headers);
+        let mut builder = reqwest::Client::builder()
+            .connect_timeout(Duration::from_millis(opts.request_timeout_ms))
+            .default_headers(headers);
         if let Some(proxy) = &opts.proxy {
             let p = reqwest::Proxy::all(proxy)
                 .map_err(|e| Error::InvalidArgument(format!("invalid proxy URL {proxy:?}: {e}")))?;
@@ -263,24 +270,32 @@ mod tests {
     }
 
     #[test]
-    fn auth_header_is_basic_for_modern_envd() {
-        // 0.6.0 >= 0.4.0 → Basic base64("user:") for the default user.
-        let (name, value) = auth_header("0.6.0", None).expect("auth header");
-        assert_eq!(name.as_str(), "authorization");
-        // base64("user:") = "dXNlcjo="
-        assert_eq!(value.to_str().unwrap_or(""), "Basic dXNlcjo=");
-        // Explicit user.
-        let (_, v2) = auth_header("0.6.0", Some("root")).expect("auth header");
-        assert_eq!(
-            v2.to_str().unwrap_or(""),
-            format!("Basic {}", base64_user("root"))
-        );
-    }
-
-    // Helper mirroring the impl for the test's expectation.
-    fn base64_user(u: &str) -> String {
+    fn auth_header_version_gating() {
         use base64::prelude::{BASE64_STANDARD, Engine as _};
-        BASE64_STANDARD.encode(format!("{u}:"))
+        let basic = |u: &str| format!("Basic {}", BASE64_STANDARD.encode(format!("{u}:")));
+        // Modern envd (>= 0.4.0), no explicit user → NO header (server default).
+        assert!(auth_header("0.6.0", None).is_none());
+        // Old envd (< 0.4.0), no explicit user → send the default user "user".
+        let (name, value) = auth_header("0.3.0", None).expect("old envd sends default user");
+        assert_eq!(name.as_str(), "authorization");
+        assert_eq!(value.to_str().unwrap_or(""), basic("user")); // "Basic dXNlcjo="
+        // Explicit user always sends, regardless of version.
+        assert_eq!(
+            auth_header("0.6.0", Some("root"))
+                .expect("explicit")
+                .1
+                .to_str()
+                .unwrap_or(""),
+            basic("root")
+        );
+        assert_eq!(
+            auth_header("0.3.0", Some("root"))
+                .expect("explicit")
+                .1
+                .to_str()
+                .unwrap_or(""),
+            basic("root")
+        );
     }
 
     #[tokio::test]
