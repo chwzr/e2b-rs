@@ -20,8 +20,6 @@
 //! assert_eq!(config.domain, "e2b.app");
 //! ```
 
-mod codegen_smoke;
-
 pub(crate) mod envd;
 
 pub(crate) mod volume;
