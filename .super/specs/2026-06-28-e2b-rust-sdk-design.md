@@ -37,7 +37,7 @@ The SDK talks to **two backends**:
 | **Sandbox** | `create`, `connect`, `list` (paginated), `kill`, `pause`/`betaPause`, resume (via connect), `set_timeout`, `update_network`, `get_info`, `get_metrics`, `is_running`, `create_snapshot`/`list_snapshots`/`delete_snapshot`, `get_host`, `upload_url`/`download_url` (signed), MCP (`get_mcp_url`/`get_mcp_token`) |
 | **Filesystem** | `read` (text/bytes/stream), `write`/`write_files` (multipart + octet-stream, gzip, metadata), `list`, `make_dir`, `rename`, `exists`, `get_info`, `remove`, `watch_dir` (streaming) |
 | **Commands** | `run` (fg), `run_background` (bg), `connect`, `send_stdin`, `close_stdin`, `kill`, `list`; `CommandHandle` (`wait`, `disconnect`, `kill`, `send_stdin`, stdout/stderr, event stream) |
-| **Pty** | `create`, `connect`, `send_input`, `resize`, `kill`, `on_data` |
+| **Pty** | `create`, `connect`, `send_input`, `resize`, `kill` (output via `CommandHandle::output()` → `CommandOutput::Pty`) |
 | **Git** | `clone`, `init`, `add`, `commit`, `push`, `pull`, `remote_add`/`remote_get`, `reset`, `restore`, `create_branch`/`checkout_branch`/`delete_branch`/`branches`, `status`, `set_config`/`get_config`/`configure_user`, `dangerously_authenticate` (executes via Commands in-sandbox) |
 | **Volume** | `create`/`connect`/`get_info`/`list`/`destroy` (static); `list`, `make_dir`, `get_info`, `exists`, `update_metadata`, `read_file` (text/bytes/stream), `write_file`, `remove` (instance) — separate volume-content REST API |
 | **Template** | fluent builder (`from_*_image`/`from_dockerfile`/`from_template`/`from_{aws,gcp}_registry`, `copy`, `run_cmd`, `set_workdir`/`set_user`/`set_envs`, `pip_install`/`npm_install`/`bun_install`/`apt_install`, `git_clone`, `make_dir`/`make_symlink`/`remove`/`rename`, `add_mcp_server`, `set_ready_cmd`/`set_start_cmd`) + build pipeline + tags + `ReadyCmd` helpers |
@@ -58,6 +58,9 @@ The SDK talks to **two backends**:
 | D7 | Builder finish | **Direct `.await`** (builder `impl IntoFuture`) | Closest to the JS feel: `Sandbox::create().template("x").await?`. |
 | D8 | Generated-code lints | **Scoped `allow`** in vendored modules | The rule polices hand-written code; generated code gets a header `allow`. |
 | D9 | Docs | **Inline `no_run` doctests on every public item; `#![deny(missing_docs)]`** (hand-written modules) | "As user-friendly as possible"; examples are compile-checked so they can't rot. |
+| D10 | Repo / workspace | `e2b-rs` is the git repo root + Cargo workspace; **all crates (incl. `xtask`) under `crates/`** | Per request. Session runs in the parent dir for `E2B` reference access; the SDK repo is self-contained. |
+| D11 | Streaming consumption | **`tokio::sync::mpsc` channels, not callbacks** | Per request: callbacks are unidiomatic in Rust. Event/output feeds become receivers; byte-body reads stay `Stream`. |
+| D12 | Toolchain | **edition 2024, MSRV `rust-version = "1.95.0"`** | Per request; 1.95.0 is installed locally and supports edition 2024. |
 
 ---
 
@@ -65,21 +68,22 @@ The SDK talks to **two backends**:
 
 ### 4.1 Workspace
 
-A Cargo workspace with one published crate and one dev-only crate:
+The `e2b-rs` folder is the git repo root and the Cargo workspace root. **Every crate lives under `crates/`** (the published SDK and the dev-only codegen driver):
 
 ```
-e2b-rs/
-├── Cargo.toml                # workspace
-├── clippy.toml               # allow-unwrap/expect-in-tests
-├── crates/
-│   └── e2b-rs/               # the published SDK crate
-│       ├── Cargo.toml        # [lints.clippy] deny unwrap/expect
-│       └── src/...
-└── xtask/                    # codegen driver (not published)
+e2b-rs/                       # git repo root + Cargo workspace root
+├── Cargo.toml                # [workspace] members = ["crates/*"]; shared [workspace.dependencies]/[workspace.lints]
+├── clippy.toml               # allow-unwrap-in-tests / allow-expect-in-tests
+├── rust-toolchain.toml       # pins stable 1.95.0
+└── crates/
+    ├── e2b-rs/               # the published SDK crate (package e2b-rs, lib e2b_rs)
+    │   ├── Cargo.toml        # rust-version = "1.95.0", edition = "2024"; [lints] workspace = true
+    │   └── src/...
+    └── xtask/                # codegen driver (not published)
         └── src/main.rs
 ```
 
-(Single-crate layout under `crates/` keeps room for future internal splits without a breaking move.)
+(Single SDK crate under `crates/` keeps room for future internal splits without a breaking move. The session's working dir is the *parent* of this repo so the `E2B` reference checkout stays reachable for codegen via `--spec-dir`.)
 
 ### 4.2 Module tree — mirrors `js-sdk/src/` for auditable parity
 
@@ -160,6 +164,8 @@ Cross-cutting concerns (the inflight concurrency semaphore, request logging via 
 | Errors / time / misc | `thiserror`, `time`, `url`, `semver`, `uuid`, `once_cell` |
 | Dockerfile | `dockerfile-parser` (evaluate; fall back to a minimal hand parser) |
 | Codegen (xtask only) | `prost-build`, `pbjson-build`, `progenitor`, `typify` |
+
+**Toolchain:** edition 2024, `rust-version = "1.95.0"` (MSRV), pinned via `rust-toolchain.toml` and verified in CI. Channels/streams use `tokio` + `futures` types already in the stack.
 
 ---
 
@@ -249,17 +255,31 @@ let text:  String  = sandbox.files.read("hello.txt").await?;       // default te
 let bytes: Vec<u8> = sandbox.files.read_bytes("hello.txt").await?;
 let stream         = sandbox.files.read_stream("big.bin").await?;   // impl Stream<Item=Result<Bytes>>
 let entries = sandbox.files.list("/home/user").await?;
-let mut w = sandbox.files.watch_dir("/tmp").on_event(|e| println!("{e:?}")).await?;
-w.stop().await?;                                                    // or .events() → Stream
+let watch = sandbox.files.watch_dir("/tmp").await?;                // WatchHandle
+let mut events = watch.events();                                  // mpsc::Receiver<FilesystemEvent>
+while let Some(ev) = events.recv().await { println!("{ev:?}"); }   // closes when watch ends
+watch.stop().await?;
 
-// Commands
-let r = sandbox.commands.run("echo hi").cwd("/app").on_stdout(|c| print!("{c}")).await?;
-let mut h = sandbox.commands.run_background("sleep 60").await?;
+// Commands — foreground is fully buffered; background gives a channel + wait()
+let r = sandbox.commands.run("echo hi").cwd("/app").await?;       // CommandResult
+let mut h = sandbox.commands.run_background("npm test").await?;   // CommandHandle
+let mut out = h.output();                                         // mpsc::Receiver<CommandOutput>
+let pump = tokio::spawn(async move {
+    while let Some(o) = out.recv().await {
+        match o {
+            CommandOutput::Stdout(s) => print!("{s}"),
+            CommandOutput::Stderr(s) => eprint!("{s}"),
+            CommandOutput::Pty(_)    => {}
+        }
+    }
+});
 h.send_stdin("data\n").await?;
-let r = h.wait().await?;                                            // or h.events() → Stream
+let r = h.wait().await?;                                          // final CommandResult; channel now closed
+pump.await.ok();
 
-// Pty
-let pty = sandbox.pty.create().size(80, 24).on_data(|b| { /* raw bytes */ }).await?;
+// Pty — output arrives as CommandOutput::Pty(Bytes) on the same channel
+let pty = sandbox.pty.create().size(80, 24).await?;              // CommandHandle
+let mut data = pty.output();                                     // mpsc::Receiver<CommandOutput>
 sandbox.pty.send_input(pty.pid, b"ls\n").await?;
 sandbox.pty.resize(pty.pid, 120, 40).await?;
 
@@ -273,16 +293,33 @@ let vol = Volume::create("data").await?;
 vol.write_file("/d/x.txt", "hi").await?;
 let t = vol.read_file("/d/x.txt").await?;
 
-// Template
-let info = Template::build(
+// Template — grab the log channel before awaiting the build
+let build = Template::build(
     Template::new().from_python_image("3.12").run_cmd("pip install numpy").set_workdir("/app"),
     "my-template",
-).on_build_logs(|e| println!("{e}")).await?;
+);
+let mut logs = build.logs();                                     // mpsc::Receiver<LogEntry>
+tokio::spawn(async move { while let Some(e) = logs.recv().await { println!("{e}"); } });
+let info = build.await?;                                          // BuildInfo
 ```
 
-### 6.4 Callbacks vs Streams
+### 6.4 Streaming consumption — channels, not callbacks
 
-For parity, streaming consumers accept closures (`on_stdout`/`on_stderr`/`on_data`/`on_event`), typed as `FnMut(_) + Send`. For idiomatic Rust, the same handles **also** expose a `Stream` of events (`CommandHandle::events()`, `WatchHandle::events()`, `read_stream`). Closures are synchronous (JS allows `void | Promise<void>`); async consumption is the Stream path. This deliberate simplification is documented on each method.
+The JS SDK uses optionally-async callbacks (`onStdout`, `onStderr`, `onData`, `onEvent`, `onBuildLogs`). `e2b-rs` replaces all of them with **`tokio::sync::mpsc` receivers**: the consumer holds a channel handle and `recv().await`s messages — no inversion of control, no `Send + 'static` closure constraints, composable with `tokio::select!`.
+
+- **Command & Pty output:** `CommandHandle::output() -> mpsc::Receiver<CommandOutput>`, where
+  ```rust
+  pub enum CommandOutput { Stdout(String), Stderr(String), Pty(Bytes) }
+  ```
+  Commands emit `Stdout`/`Stderr`; PTYs emit `Pty` (raw bytes). The channel is created with the handle and **closes when the process ends** (the loop terminates naturally). `wait()` still returns the aggregated `CommandResult` — stdout/stderr are accumulated for parity whether or not the channel is drained.
+- **Filesystem watch:** `WatchHandle::events() -> mpsc::Receiver<FilesystemEvent>`. The channel closes when the watch ends; a terminal error (the JS `onExit(err)`) is observable on the handle (`WatchHandle::stop()` returns the terminal `Result`, and the handle records any spontaneous error).
+- **Build logs:** the build builder's `logs() -> mpsc::Receiver<LogEntry>`, called before `.await`. A `default_build_logger` helper consumes such a receiver and pretty-prints (TTY spinner + elapsed time) for parity with JS's default.
+
+**Mechanism:** a background driver task (`tokio::spawn`) owns each underlying RPC/poll stream, parses it, and forwards messages into the channel. It is aborted on `stop()`/`disconnect()` or when the handle is dropped (the handle stores an `AbortHandle`). Handle control methods (`wait`/`kill`/`send_stdin`/`close_stdin`) take `&self`/`&mut self`, not `self`, so output can be drained on one task while another awaits `wait()` or issues `kill()`. Output channels are **unbounded** — matching JS's always-accumulate semantics — so a consumer that never drains cannot stall the driver.
+
+**Byte-body reads are not channels.** `files.read_stream` and `volume.read_file` (stream mode) return `impl Stream<Item = Result<Bytes>>` directly — the canonical async-Rust shape for an HTTP response body: lazy, back-pressured by polling, and requiring no driver task.
+
+**Config closures are unaffected.** The network selector (`SandboxNetworkSelector::Fn`) is a pure synchronous config function, not an event stream, and stays a closure (see §9).
 
 ### 6.5 Multi-format reads
 
@@ -327,12 +364,12 @@ Unit-tested at the byte level (envelope round-trip, multi-frame streams, end-str
 
 - **Filesystem.write** picks multipart/form-data by default; switches to `application/octet-stream` (streamed body) when given a stream or `use_octet_stream`, gated by `ENVD_OCTET_STREAM_UPLOAD` (0.5.7). gzip sets `Content-Encoding: gzip`. Metadata → `X-Metadata-*` (0.6.2). Streamed uploads bypass the request timeout.
 - **Filesystem.read(stream)** holds a pooled connection; an idle-timeout (`stream_idle_timeout_ms`, default = request timeout, `0` disables) aborts unconsumed streams.
-- **watch_dir** gates: recursive (`ENVD_VERSION_RECURSIVE_WATCH` 0.1.4), `include_entry` (0.6.3), `allow_network_mounts` (0.6.4). `on_exit` fires exactly once.
-- **Commands.run** wraps `/bin/bash -l -c <cmd>`; non-zero exit → `Err(CommandExit{..})`. `stdin` gated by 0.3.0; `close_stdin` by `ENVD_ENVD_CLOSE` 0.5.2. stdout/stderr decoded with streaming UTF-8 (incremental, flush on close).
-- **Pty.create** runs `/bin/bash -i -l`, injects `TERM`/`LANG`/`LC_ALL` if absent; `on_data` receives raw bytes.
+- **watch_dir** gates: recursive (`ENVD_VERSION_RECURSIVE_WATCH` 0.1.4), `include_entry` (0.6.3), `allow_network_mounts` (0.6.4). Events flow to the `events()` channel; the channel closes once when watching ends, and the terminal `Result` (clean end vs. error — JS `onExit`) is surfaced on the handle.
+- **Commands.run** wraps `/bin/bash -l -c <cmd>`; non-zero exit → `Err(CommandExit{..})`. `stdin` gated by 0.3.0; `close_stdin` by `ENVD_ENVD_CLOSE` 0.5.2. stdout/stderr decoded with streaming UTF-8 (incremental, flush on close), accumulated for `wait()` and mirrored to the `output()` channel. Foreground `run` consumes the stream internally and returns a fully-buffered `CommandResult`; live output uses `run_background` + `output()`.
+- **Pty.create** runs `/bin/bash -i -l`, injects `TERM`/`LANG`/`LC_ALL` if absent; raw output is delivered as `CommandOutput::Pty(Bytes)` on the handle's `output()` channel.
 - **Git** builds `git [-C path] …` via `shell_quote` (shlex-equivalent), with `GIT_TERMINAL_PROMPT=0`. Credentials are inlined into the remote URL transiently for clone/push/pull then restored; auth/upstream failures detected by stderr regex → `GitAuth`/`GitUpstream`. `status` parses `--porcelain=1 -b`; `branches` parses branch listing.
 - **Volume** read/write mirror Filesystem format handling; separate `Authorization: Bearer ${token}` API; `FILE_TIMEOUT_MS = 3_600_000` for streamed transfers.
-- **Template build pipeline:** (1) `POST /v3/templates` → `{templateID, buildID}`; (2) per COPY layer, `GET …/files/{hash}` presence check, then stream a **gzip tar** of the matched context (spooled to a temp file via `tempfile`, deterministic file ordering, hash over relative path + mode + size + content + symlink target) to the presigned S3 URL via `PUT` with `Content-Length`; (3) `POST /v2/templates/{id}/builds/{buildID}` with steps; (4) poll `…/builds/{buildID}/status` with `logsOffset`, emitting `LogEntry`s to `on_build_logs` until `ready`/`error`. `FILE_UPLOAD_TIMEOUT_MS = 3_600_000`. Dockerfile parsing extracts FROM/RUN/COPY/WORKDIR/USER/ENV/ARG/CMD/ENTRYPOINT (multi-stage → error). `ReadyCmd` helpers generate shell snippets (`wait_for_port` → `ss`, `wait_for_url` → `curl`, `wait_for_process` → `pgrep`, `wait_for_file` → `[ -f ]`, `wait_for_timeout` → `sleep`).
+- **Template build pipeline:** (1) `POST /v3/templates` → `{templateID, buildID}`; (2) per COPY layer, `GET …/files/{hash}` presence check, then stream a **gzip tar** of the matched context (spooled to a temp file via `tempfile`, deterministic file ordering, hash over relative path + mode + size + content + symlink target) to the presigned S3 URL via `PUT` with `Content-Length`; (3) `POST /v2/templates/{id}/builds/{buildID}` with steps; (4) poll `…/builds/{buildID}/status` with `logsOffset`, forwarding `LogEntry`s to the build's `logs()` channel until `ready`/`error`. `FILE_UPLOAD_TIMEOUT_MS = 3_600_000`. Dockerfile parsing extracts FROM/RUN/COPY/WORKDIR/USER/ENV/ARG/CMD/ENTRYPOINT (multi-stage → error). `ReadyCmd` helpers generate shell snippets (`wait_for_port` → `ss`, `wait_for_url` → `curl`, `wait_for_process` → `pgrep`, `wait_for_file` → `[ -f ]`, `wait_for_timeout` → `sleep`).
 - **Network rules:** `SandboxNetworkSelector` is `enum { List(Vec<String>), Fn(Box<dyn Fn(SelectorContext) -> Vec<String> + Send + Sync>) }`; `ALL_TRAFFIC = "0.0.0.0/0"`. Rules accept map/ordered-map of `transform { headers }`. `update_network` is an atomic replace (`PUT …/network`).
 - **Pagination:** cursor via `x-next-token` response header; `has_next` true iff token present; `next_items` errors when exhausted.
 - **MCP:** `get_mcp_url` = `https://{host(mcp_port)}/mcp`; `get_mcp_token` reads `/etc/mcp-gateway/.token` or a cached `uuid`.
@@ -401,7 +438,7 @@ Each phase compiles and is testable before the next; within each, implementation
 | progenitor fails on a spec surface | Per-surface fallback to typify (types) + hand-written calls. |
 | proto3 JSON ↔ pbjson field-name/timestamp/bytes mismatch | Byte-level conformance tests against recorded envd responses; pbjson follows the canonical proto3 JSON mapping that connect-web emits. |
 | `dockerfile-parser` crate gaps vs. `dockerfile-ast` | Evaluate early; fall back to a minimal hand parser for the supported instruction subset. |
-| Async closure callbacks | Sync `FnMut` callbacks + Stream API for async consumption (documented deviation). |
+| Driver-task lifecycle leaks (channels) | Each handle stores an `AbortHandle`; the driver is aborted on `stop`/`disconnect`/drop. Tested for no orphaned tasks. |
 | Spec drift (separate repo) | `xtask --spec-dir` re-syncs from an E2B checkout; vendored output committed and reviewed. |
 | Streamed request-body timeouts | Match JS: streamed uploads bypass the handshake timeout; rely on idle/overall caps. |
 
@@ -411,4 +448,3 @@ Each phase compiles and is testable before the next; within each, implementation
 
 - Publish cadence / crates.io name reservation for `e2b-rs`.
 - Whether to expose a `tracing` feature that bridges `Logger` to the `tracing` ecosystem (nice-to-have, not parity).
-- Minimum supported Rust version (MSRV) target.
