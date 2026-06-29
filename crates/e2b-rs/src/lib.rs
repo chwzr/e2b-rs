@@ -20,6 +20,8 @@
 //! assert_eq!(config.domain, "e2b.app");
 //! ```
 
+pub(crate) mod http;
+
 pub(crate) mod envd;
 
 pub(crate) mod volume;
