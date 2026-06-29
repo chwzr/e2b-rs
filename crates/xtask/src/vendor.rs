@@ -1,8 +1,5 @@
 //! Shared helpers for writing generated code into the SDK source tree.
 
-// Items are unused until Task 2 wires generators; suppress until then.
-#![allow(dead_code)]
-
 use std::path::Path;
 
 /// Header prepended to every vendored file: marks it generated and exempts it

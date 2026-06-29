@@ -22,6 +22,8 @@
 
 mod codegen_smoke;
 
+pub(crate) mod envd;
+
 mod utils;
 
 pub mod errors;
