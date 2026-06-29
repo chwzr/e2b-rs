@@ -91,7 +91,7 @@ impl ApiClient {
             http,
             base_url: config.api_url.trim_end_matches('/').to_string(),
             request_timeout: Duration::from_millis(config.request_timeout_ms),
-            limiter: ConcurrencyLimiter::new(0), // cap wired from env in a later task; 0 = unlimited
+            limiter: ConcurrencyLimiter::new(config.api_inflight_requests),
             logger: config.logger.clone(),
         })
     }

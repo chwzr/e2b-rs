@@ -29,6 +29,18 @@ Note: typify produced no useful types from the `mcp-server.json` catalog schema 
 
 Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 
-## Transports (Plan 2b) · Sandbox & I/O (Plan 3) · Git & Volume (Plan 4) · Template (Plan 5)
+## REST transports (Plan 2b-i)
+
+| JS (`src/...`) | Rust (`e2b_rs::...`) | Status |
+|---|---|---|
+| `api/index.ts` `ApiClient` + `validateApiKey` | `api::client::{ApiClient, validate_api_key}` | ✅ |
+| `api/inflight.ts` `limitConcurrency` | `http::inflight::ConcurrencyLimiter` | ✅ |
+| `envd/api.ts` client + `checkSandboxHealth` | `envd::rest::EnvdApiClient` (+ `check_health`) | ✅ |
+| `api/index.ts` per-endpoint calls (createSandbox, …) | _(Plan 3+, built on `ApiClient::request`)_ | ⬜ |
+| `envd/api.ts` `/files` read/write | _(Plan 3 Filesystem — multipart/octet-stream/gzip)_ | ⬜ |
+
+Connect-over-JSON RPC client (filesystem/process/pty) is Plan 2b-ii.
+
+## Sandbox & I/O (Plan 3) · Git & Volume (Plan 4) · Template (Plan 5)
 
 _Rows added as each milestone lands._

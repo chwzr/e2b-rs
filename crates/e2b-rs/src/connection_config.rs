@@ -79,6 +79,8 @@ pub struct ConnectionConfig {
     pub headers: BTreeMap<String, String>,
     /// Optional proxy URL.
     pub proxy: Option<String>,
+    /// Max concurrent in-flight control-plane requests (`0` = unlimited).
+    pub api_inflight_requests: usize,
 }
 
 /// Return `primary` if it is a non-empty string, else the first non-empty
@@ -135,6 +137,11 @@ impl ConnectionConfig {
 
         let sandbox_url = first_non_empty(opts.sandbox_url, || env("E2B_SANDBOX_URL"));
 
+        // Inflight cap: allows 0 (disable); non-integer/negative falls back to default.
+        let api_inflight_requests = env("E2B_API_INFLIGHT_REQUESTS")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1000);
+
         let mut headers = opts.headers;
         headers.insert(
             "User-Agent".to_string(),
@@ -154,6 +161,7 @@ impl ConnectionConfig {
             integration: opts.integration,
             headers,
             proxy: opts.proxy,
+            api_inflight_requests,
         }
     }
 
@@ -338,5 +346,31 @@ mod tests {
             dbg.get_sandbox_url("sb1", "e2b.app", 49983),
             "http://localhost:49983"
         );
+    }
+
+    #[test]
+    fn resolves_api_inflight_limit() {
+        let c = cfg(ConnectionConfigOpts::default(), &[]);
+        assert_eq!(c.api_inflight_requests, 1000); // default
+
+        let c2 = cfg(
+            ConnectionConfigOpts::default(),
+            &[("E2B_API_INFLIGHT_REQUESTS", "50")],
+        );
+        assert_eq!(c2.api_inflight_requests, 50);
+
+        // 0 is allowed (disables the cap), per parseInflightLimitEnv.
+        let c3 = cfg(
+            ConnectionConfigOpts::default(),
+            &[("E2B_API_INFLIGHT_REQUESTS", "0")],
+        );
+        assert_eq!(c3.api_inflight_requests, 0);
+
+        // Non-integer falls back to the default rather than panicking.
+        let c4 = cfg(
+            ConnectionConfigOpts::default(),
+            &[("E2B_API_INFLIGHT_REQUESTS", "nope")],
+        );
+        assert_eq!(c4.api_inflight_requests, 1000);
     }
 }
