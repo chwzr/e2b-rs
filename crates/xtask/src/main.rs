@@ -27,6 +27,11 @@ fn main() -> anyhow::Result<()> {
                 &sdk_src.join("api/gen.rs"),
             )?;
             println!("xtask codegen: wrote control-plane API types");
+            openapi::generate_schema_types(
+                &spec_dir.join("envd/envd.yaml"),
+                &sdk_src.join("envd/rest_gen.rs"),
+            )?;
+            println!("xtask codegen: wrote envd REST types");
             Ok(())
         }
         other => Err(anyhow::anyhow!(
