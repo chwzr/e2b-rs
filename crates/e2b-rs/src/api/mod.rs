@@ -1,6 +1,7 @@
 //! Control-plane REST API client and generated schema types. The `ApiClient`
 //! and per-endpoint calls land in Plan 2b.
 
+pub(crate) mod client;
 pub(crate) mod schema;
 
 #[cfg(test)]
