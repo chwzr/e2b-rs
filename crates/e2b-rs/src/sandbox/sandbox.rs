@@ -102,6 +102,13 @@ impl Sandbox {
         ))
     }
 
+    /// List sandboxes (paginated). Filter by state/metadata via [`SandboxListOpts`].
+    pub fn list(
+        opts: crate::sandbox::opts::SandboxListOpts,
+    ) -> Result<crate::sandbox::paginator::SandboxPaginator> {
+        crate::sandbox::paginator::SandboxPaginator::new(opts)
+    }
+
     /// Build a `Sandbox` from a control-plane detail + the resolved config/client.
     fn from_detail(
         detail: crate::api::schema::SandboxDetail,

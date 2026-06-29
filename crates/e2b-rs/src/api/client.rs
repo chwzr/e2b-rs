@@ -105,7 +105,7 @@ impl ApiClient {
         query: &[(&str, String)],
         body: Option<&serde_json::Value>,
     ) -> Result<T> {
-        let bytes = self.send(method, path, query, body).await?;
+        let (bytes, _) = self.send(method, path, query, body).await?;
         serde_json::from_slice::<T>(&bytes)
             .map_err(|e| Error::Internal(format!("failed to decode response from {path}: {e}")))
     }
@@ -121,6 +121,21 @@ impl ApiClient {
         self.send(method, path, query, body).await.map(|_| ())
     }
 
+    /// Like [`ApiClient::request`] but also returns the response headers (for
+    /// pagination cursors).
+    pub(crate) async fn request_with_headers<T: DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&serde_json::Value>,
+    ) -> Result<(T, reqwest::header::HeaderMap)> {
+        let (bytes, headers) = self.send(method, path, query, body).await?;
+        let value = serde_json::from_slice::<T>(&bytes)
+            .map_err(|e| Error::Internal(format!("failed to decode response from {path}: {e}")))?;
+        Ok((value, headers))
+    }
+
     /// Health check: `GET /health`.
     pub(crate) async fn health(&self) -> Result<()> {
         self.request_unit(reqwest::Method::GET, "/health", &[], None)
@@ -128,14 +143,14 @@ impl ApiClient {
     }
 
     /// Shared request execution: build, send, log, map status to `Error`, and
-    /// return the raw success body bytes.
+    /// return the raw success body bytes along with the response headers.
     async fn send(
         &self,
         method: reqwest::Method,
         path: &str,
         query: &[(&str, String)],
         body: Option<&serde_json::Value>,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<(Vec<u8>, reqwest::header::HeaderMap)> {
         let _permit = self.limiter.acquire().await;
         let url = format!("{}{path}", self.base_url);
         if let Some(logger) = &self.logger {
@@ -154,10 +169,11 @@ impl ApiClient {
         }
         let resp = req.send().await?;
         let status = resp.status();
+        let headers = resp.headers().clone();
         let body_bytes = resp.bytes().await?;
 
         if status.is_success() {
-            return Ok(body_bytes.to_vec());
+            return Ok((body_bytes.to_vec(), headers));
         }
 
         // Extract the server's error message (control-plane Error.message), else the status reason.
