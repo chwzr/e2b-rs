@@ -102,7 +102,10 @@ impl Sandbox {
         ))
     }
 
-    /// List sandboxes (paginated). Filter by state/metadata via [`SandboxListOpts`].
+    /// List sandboxes (paginated). Filter by state/metadata via [`crate::SandboxListOpts`].
+    ///
+    /// Note: defaults to listing only `Running` and `Paused` sandboxes (the JS
+    /// SDK lists all states by default); pass `SandboxListOpts::states` to override.
     pub fn list(
         opts: crate::sandbox::opts::SandboxListOpts,
     ) -> Result<crate::sandbox::paginator::SandboxPaginator> {

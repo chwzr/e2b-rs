@@ -51,7 +51,9 @@ impl SandboxPaginator {
         let mut query: Vec<(&str, String)> = Vec::new();
         // Control-plane arrays are form-style, NOT exploded: `state=running,paused`
         // (don't push repeated `state` pairs — reqwest would explode them).
-        query.push(("state", self.states.join(",")));
+        if !self.states.is_empty() {
+            query.push(("state", self.states.join(",")));
+        }
         if let Some(limit) = self.state.limit() {
             query.push(("limit", limit.to_string()));
         }

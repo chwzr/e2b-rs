@@ -8,6 +8,20 @@
 //! signatures. Sandbox creation, command execution, and the filesystem API
 //! arrive in later milestones.
 //!
+//! ## Creating a sandbox
+//!
+//! ```no_run
+//! # async fn run() -> e2b_rs::Result<()> {
+//! use e2b_rs::Sandbox;
+//!
+//! let sandbox = Sandbox::create().template("base").await?;
+//! let info = sandbox.get_info().await?;
+//! assert_eq!(info.state, e2b_rs::SandboxState::Running);
+//! sandbox.kill().await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Resolving configuration
 //!
 //! ```
@@ -50,8 +64,8 @@ pub mod sandbox;
 
 pub use sandbox::signature::{Signature, SignatureOperation, get_signature, get_signature_now};
 pub use sandbox::{
-    Sandbox, SandboxConnectBuilder, SandboxCreateBuilder, SandboxInfo, SandboxPaginator,
-    SandboxState,
+    Sandbox, SandboxConnectBuilder, SandboxConnectOpts, SandboxCreateBuilder, SandboxCreateOpts,
+    SandboxInfo, SandboxListOpts, SandboxPaginator, SandboxState,
 };
 
 pub mod paginator;

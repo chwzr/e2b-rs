@@ -15,6 +15,16 @@ built to feel familiar while reading as idiomatic async Rust.
 e2b-rs = "0.1"
 ```
 
+## Quickstart
+
+```rust
+use e2b_rs::Sandbox;
+
+let sandbox = Sandbox::create().template("base").await?;
+println!("{}", sandbox.get_host(3000));
+sandbox.kill().await?;
+```
+
 The library is imported as `e2b_rs`:
 
 ```rust
