@@ -1,0 +1,22 @@
+[package]
+name = "e2b-rs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Rust SDK for E2B cloud sandboxes (a 1:1 port of the official JavaScript SDK)"
+keywords = ["e2b", "sandbox", "ai-agents", "code-interpreter"]
+categories = ["api-bindings", "asynchronous"]
+
+[lib]
+name = "e2b_rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
