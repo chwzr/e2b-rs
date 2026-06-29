@@ -8,6 +8,8 @@
 //! signatures. Sandbox creation, command execution, and the filesystem API
 //! arrive in later milestones.
 
+mod utils;
+
 pub mod errors;
 
 pub use errors::{Error, Result};
