@@ -22,6 +22,11 @@ fn main() -> anyhow::Result<()> {
                 &sdk_src.join("volume/gen.rs"),
             )?;
             println!("xtask codegen: wrote volume content types");
+            openapi::generate_schema_types(
+                &spec_dir.join("openapi.yml"),
+                &sdk_src.join("api/gen.rs"),
+            )?;
+            println!("xtask codegen: wrote control-plane API types");
             Ok(())
         }
         other => Err(anyhow::anyhow!(

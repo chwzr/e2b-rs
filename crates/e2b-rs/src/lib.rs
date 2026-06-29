@@ -26,6 +26,8 @@ pub(crate) mod envd;
 
 pub(crate) mod volume;
 
+pub(crate) mod api;
+
 mod utils;
 
 pub mod errors;
