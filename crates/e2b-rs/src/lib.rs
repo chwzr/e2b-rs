@@ -17,7 +17,7 @@
 //!     domain: Some("e2b.app".to_string()),
 //!     ..Default::default()
 //! });
-//! assert_eq!(config.api_url, "https://api.e2b.app");
+//! assert_eq!(config.domain, "e2b.app");
 //! ```
 
 mod utils;

@@ -5,7 +5,6 @@ use sha2::{Digest, Sha256};
 
 /// SHA-256 of `data`, encoded as standard base64 (with `=` padding), matching
 /// the JS `sha256` helper.
-#[allow(dead_code)]
 pub(crate) fn sha256_base64(data: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data.as_bytes());
@@ -42,11 +41,10 @@ pub(crate) fn shell_quote(s: &str) -> String {
 }
 
 /// Build the `User-Agent` header value, optionally tagging an integration.
-#[allow(dead_code)]
 pub(crate) fn build_user_agent(integration: Option<&str>) -> String {
     let base = concat!("e2b-rs/", env!("CARGO_PKG_VERSION"));
     match integration {
-        Some(name) if !name.is_empty() => format!("{base} ({name})"),
+        Some(name) if !name.is_empty() => format!("{base} {name}"),
         _ => base.to_string(),
     }
 }
@@ -90,9 +88,12 @@ mod tests {
 
     #[test]
     fn user_agent_contains_version() {
-        let ua = build_user_agent(None);
-        assert!(ua.starts_with("e2b-rs/"));
-        let ua2 = build_user_agent(Some("langchain"));
-        assert!(ua2.contains("langchain"));
+        let v = env!("CARGO_PKG_VERSION");
+        assert_eq!(build_user_agent(None), format!("e2b-rs/{v}"));
+        assert_eq!(
+            build_user_agent(Some("langchain")),
+            format!("e2b-rs/{v} langchain")
+        );
+        assert_eq!(build_user_agent(Some("")), format!("e2b-rs/{v}")); // empty = falsy, like JS
     }
 }
