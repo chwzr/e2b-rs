@@ -64,9 +64,10 @@ impl EnvdApiClient {
         }
 
         let mut builder = reqwest::Client::builder().default_headers(headers);
-        if let Some(proxy) = &opts.proxy
-            && let Ok(p) = reqwest::Proxy::all(proxy)
-        {
+        if let Some(proxy) = &opts.proxy {
+            let p = reqwest::Proxy::all(proxy).map_err(|e| {
+                crate::errors::Error::InvalidArgument(format!("invalid proxy URL {proxy:?}: {e}"))
+            })?;
             builder = builder.proxy(p);
         }
         let http = builder.build()?;
@@ -79,19 +80,26 @@ impl EnvdApiClient {
         })
     }
 
-    /// Return `true` iff `GET /health` responds 2xx within the health timeout.
-    /// Any error, non-2xx, or timeout yields `false` (mirrors `checkSandboxHealth`).
-    pub(crate) async fn check_health(&self) -> bool {
+    /// Probe `GET /health` and return:
+    ///
+    /// - `Some(true)` — responded with a 2xx status (sandbox is healthy).
+    /// - `Some(false)` — responded but with a non-2xx status (e.g. 502); Plan 3
+    ///   treats this as a confirmed-dead sandbox.
+    /// - `None` — the probe itself failed (transport error, timeout, DNS, etc.);
+    ///   Plan 3 leaves transient errors intact and does not treat this as
+    ///   conclusively unhealthy.
+    ///
+    /// Uses the fixed 5 s `HEALTH_TIMEOUT_MS` constant (matching JS
+    /// `checkSandboxHealth`), not clamped to the per-request timeout.
+    pub(crate) async fn check_health(&self) -> Option<bool> {
         let url = format!("{}/health", self.base_url);
-        let timeout = self
-            .request_timeout
-            .min(Duration::from_millis(HEALTH_TIMEOUT_MS));
+        let timeout = Duration::from_millis(HEALTH_TIMEOUT_MS);
         if let Some(logger) = &self.logger {
             logger.debug(&format!("GET {url} (health)"));
         }
         match self.http.get(&url).timeout(timeout).send().await {
-            Ok(resp) => resp.status().is_success(),
-            Err(_) => false,
+            Ok(resp) => Some(resp.status().is_success()),
+            Err(_) => None,
         }
     }
 }
@@ -126,7 +134,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = EnvdApiClient::new(opts_for(&server)).expect("construct");
-        assert!(client.check_health().await);
+        assert_eq!(client.check_health().await, Some(true));
     }
 
     #[tokio::test]
@@ -138,6 +146,24 @@ mod tests {
             .mount(&server)
             .await;
         let client = EnvdApiClient::new(opts_for(&server)).expect("construct");
-        assert!(!client.check_health().await);
+        assert_eq!(client.check_health().await, Some(false));
+    }
+
+    #[tokio::test]
+    async fn check_health_none_on_connection_error() {
+        // Port 1 is unroutable on all modern OSes; the connect should fail
+        // immediately and the probe should return None (unknown / transport error).
+        let client = EnvdApiClient::new(EnvdApiClientOpts {
+            base_url: "http://127.0.0.1:1".to_string(),
+            access_token: None,
+            sandbox_id: "sbx_test".to_string(),
+            envd_port: 49983,
+            user_agent: "e2b-rs/test".to_string(),
+            request_timeout_ms: 5_000,
+            logger: None,
+            proxy: None,
+        })
+        .expect("construct");
+        assert_eq!(client.check_health().await, None);
     }
 }

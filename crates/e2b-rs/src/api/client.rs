@@ -80,9 +80,9 @@ impl ApiClient {
         }
 
         let mut builder = reqwest::Client::builder().default_headers(headers);
-        if let Some(proxy) = &config.proxy
-            && let Ok(p) = reqwest::Proxy::all(proxy)
-        {
+        if let Some(proxy) = &config.proxy {
+            let p = reqwest::Proxy::all(proxy)
+                .map_err(|e| Error::InvalidArgument(format!("invalid proxy URL {proxy:?}: {e}")))?;
             builder = builder.proxy(p);
         }
         let http = builder.build()?;
@@ -105,8 +105,8 @@ impl ApiClient {
         query: &[(&str, String)],
         body: Option<&serde_json::Value>,
     ) -> Result<T> {
-        let body = self.send(method, path, query, body).await?;
-        serde_json::from_slice::<T>(&body)
+        let bytes = self.send(method, path, query, body).await?;
+        serde_json::from_slice::<T>(&bytes)
             .map_err(|e| Error::Internal(format!("failed to decode response from {path}: {e}")))
     }
 

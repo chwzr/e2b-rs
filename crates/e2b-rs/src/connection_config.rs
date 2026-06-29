@@ -137,10 +137,21 @@ impl ConnectionConfig {
 
         let sandbox_url = first_non_empty(opts.sandbox_url, || env("E2B_SANDBOX_URL"));
 
-        // Inflight cap: allows 0 (disable); non-integer/negative falls back to default.
-        let api_inflight_requests = env("E2B_API_INFLIGHT_REQUESTS")
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(1000);
+        // Inflight cap: allows 0 (disable); non-integer falls back to default and logs a warning.
+        let api_inflight_requests = match env("E2B_API_INFLIGHT_REQUESTS") {
+            Some(v) => match v.parse::<usize>() {
+                Ok(n) => n,
+                Err(_) => {
+                    if let Some(logger) = &opts.logger {
+                        logger.warn(&format!(
+                            "invalid E2B_API_INFLIGHT_REQUESTS={v:?}; falling back to default 1000"
+                        ));
+                    }
+                    1000
+                }
+            },
+            None => 1000,
+        };
 
         let mut headers = opts.headers;
         headers.insert(
@@ -366,7 +377,8 @@ mod tests {
         );
         assert_eq!(c3.api_inflight_requests, 0);
 
-        // Non-integer falls back to the default rather than panicking.
+        // non-integer falls back to default + logs a warning (ConnectionConfig::new is
+        // infallible, so unlike JS it cannot throw).
         let c4 = cfg(
             ConnectionConfigOpts::default(),
             &[("E2B_API_INFLIGHT_REQUESTS", "nope")],
