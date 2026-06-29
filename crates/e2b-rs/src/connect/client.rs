@@ -141,6 +141,84 @@ impl ConnectClient {
         serde_json::from_slice::<Resp>(&bytes)
             .map_err(|e| Error::Internal(format!("failed to decode response from {path}: {e}")))
     }
+
+    /// Make a server-streaming Connect call: `POST {base}{path}` with
+    /// `application/connect+json` and a single enveloped request; decode the
+    /// response envelope stream into messages. The end-stream frame ends the
+    /// stream (or yields a final `Err` if it carries an error).
+    #[allow(dead_code)] // consumed by Plan 3 callers
+    pub(crate) async fn server_stream<Req: Serialize, Resp: DeserializeOwned + 'static>(
+        &self,
+        path: &str,
+        req: &Req,
+        user: Option<&str>,
+    ) -> Result<impl futures::Stream<Item = Result<Resp>> + use<Req, Resp>> {
+        use crate::connect::envelope::{EnvelopeDecoder, encode_envelope};
+        use futures::StreamExt as _;
+
+        let url = format!("{}{path}", self.base_url);
+        if let Some(logger) = &self.logger {
+            logger.debug(&format!("POST {url} (stream)"));
+        }
+        let encoded = serde_json::to_vec(req)
+            .map_err(|e| Error::Internal(format!("failed to encode request for {path}: {e}")))?;
+        let body = encode_envelope(0, &encoded);
+
+        let mut rb = self
+            .http
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, "application/connect+json")
+            .header("connect-protocol-version", "1")
+            .body(body);
+        if let Some((name, value)) = auth_header(&self.envd_version, user) {
+            rb = rb.header(name, value);
+        }
+
+        let resp = rb.send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let bytes = resp.bytes().await?;
+            let (code, message) = parse_connect_error(status.as_u16(), &bytes);
+            return Err(map_code_to_error(code, message));
+        }
+
+        let path = path.to_string();
+        let mut bytes_stream = resp.bytes_stream();
+        let stream = async_stream::try_stream! {
+            let mut decoder = EnvelopeDecoder::new();
+            while let Some(chunk) = bytes_stream.next().await {
+                let chunk = chunk?; // reqwest::Error -> Error::Transport
+                decoder.push(&chunk);
+                while let Some(frame) = decoder.next_frame() {
+                    if frame.is_end_stream() {
+                        // End-of-stream: payload may carry `{ "error": {code, message} }`.
+                        if let Some(err) = end_stream_error(&frame.data) {
+                            Err(err)?;
+                        }
+                        return;
+                    }
+                    let msg: Resp = serde_json::from_slice(&frame.data)
+                        .map_err(|e| Error::Internal(format!("failed to decode stream frame from {path}: {e}")))?;
+                    yield msg;
+                }
+            }
+        };
+        Ok(stream)
+    }
+}
+
+/// Parse a Connect end-of-stream frame; returns an [`Error`] if it carries one.
+fn end_stream_error(data: &[u8]) -> Option<Error> {
+    #[derive(serde::Deserialize)]
+    struct EndStream {
+        error: Option<serde_json::Value>,
+    }
+    let parsed = serde_json::from_slice::<EndStream>(data).ok()?;
+    let err = parsed.error?;
+    // The nested error is `{code, message}`; reuse the unary error parser.
+    let bytes = serde_json::to_vec(&err).ok()?;
+    let (code, message) = parse_connect_error(200, &bytes);
+    Some(map_code_to_error(code, message))
 }
 
 #[cfg(test)]
@@ -226,5 +304,76 @@ mod tests {
             crate::errors::Error::NotFound(m) => assert!(m.contains("no such file")),
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn server_stream_decodes_enveloped_messages_until_end() {
+        use crate::connect::envelope::{FLAG_END_STREAM, encode_envelope};
+        use futures::StreamExt as _;
+
+        // Build a Connect streaming body: two message frames + a clean end-stream frame.
+        let mut body = encode_envelope(0, br#"{"n":1}"#);
+        body.extend(encode_envelope(0, br#"{"n":2}"#));
+        body.extend(encode_envelope(FLAG_END_STREAM, b"{}"));
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/process.Process/Start"))
+            .and(header("content-type", "application/connect+json"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+            .mount(&server)
+            .await;
+
+        let client = ConnectClient::new(opts_for(&server)).expect("client");
+        let stream = client
+            .server_stream::<_, serde_json::Value>(
+                super::super::PROC_START,
+                &serde_json::json!({}),
+                None,
+            )
+            .await
+            .expect("stream opened");
+        futures::pin_mut!(stream);
+        let mut ns = Vec::new();
+        while let Some(item) = stream.next().await {
+            ns.push(item.expect("frame ok")["n"].as_i64().unwrap_or(0));
+        }
+        assert_eq!(ns, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn server_stream_surfaces_end_stream_error() {
+        use crate::connect::envelope::{FLAG_END_STREAM, encode_envelope};
+        use futures::StreamExt as _;
+
+        let mut body = encode_envelope(0, br#"{"n":1}"#);
+        body.extend(encode_envelope(
+            FLAG_END_STREAM,
+            br#"{"error":{"code":"not_found","message":"gone"}}"#,
+        ));
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/process.Process/Start"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+            .mount(&server)
+            .await;
+        let client = ConnectClient::new(opts_for(&server)).expect("client");
+        let stream = client
+            .server_stream::<_, serde_json::Value>(
+                super::super::PROC_START,
+                &serde_json::json!({}),
+                None,
+            )
+            .await
+            .expect("stream opened");
+        futures::pin_mut!(stream);
+        // First item: the data frame {"n":1} (Ok).
+        let first = stream.next().await.expect("first item").expect("first ok");
+        assert_eq!(first["n"].as_i64().unwrap_or(0), 1);
+        // Second item: the end-stream error → Err(NotFound).
+        let second = stream.next().await.expect("second item");
+        assert!(matches!(second, Err(crate::errors::Error::NotFound(_))));
+        // Stream ends after the error frame.
+        assert!(stream.next().await.is_none());
     }
 }

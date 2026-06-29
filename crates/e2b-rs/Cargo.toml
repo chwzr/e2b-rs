@@ -31,6 +31,7 @@ regress = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 reqwest = { workspace = true }
 futures = { workspace = true }
+async-stream = { workspace = true }
 semver = { workspace = true }
 
 [dev-dependencies]
