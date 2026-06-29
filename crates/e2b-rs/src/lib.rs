@@ -13,3 +13,7 @@ mod utils;
 pub mod errors;
 
 pub use errors::{Error, Result};
+
+pub mod logs;
+
+pub use logs::{Logger, NoopLogger};
