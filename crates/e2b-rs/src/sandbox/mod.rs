@@ -8,9 +8,11 @@ pub(crate) mod paginator;
 #[allow(clippy::module_inception)] // `sandbox.rs` inside the `sandbox` module is intentional
 pub(crate) mod sandbox;
 pub mod signature;
+pub(crate) mod snapshot_paginator;
 pub mod types;
 
-pub use opts::{SandboxConnectOpts, SandboxCreateOpts, SandboxListOpts};
+pub use opts::{SandboxConnectOpts, SandboxCreateOpts, SandboxListOpts, SnapshotListOpts};
 pub use paginator::SandboxPaginator;
 pub use sandbox::{Sandbox, SandboxConnectBuilder, SandboxCreateBuilder};
+pub use snapshot_paginator::SnapshotPaginator;
 pub use types::{SandboxInfo, SandboxMetrics, SandboxState, SnapshotInfo};

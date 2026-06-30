@@ -142,6 +142,14 @@ impl Sandbox {
         api::delete_snapshot(&api, &snapshot_id.into()).await
     }
 
+    /// List snapshots (paginated). Filter by source sandbox via
+    /// [`SnapshotListOpts::sandbox_id`].
+    pub fn list_snapshots(
+        opts: crate::sandbox::opts::SnapshotListOpts,
+    ) -> Result<crate::sandbox::snapshot_paginator::SnapshotPaginator> {
+        crate::sandbox::snapshot_paginator::SnapshotPaginator::new(opts)
+    }
+
     /// List sandboxes (paginated). Filter by state/metadata via [`crate::SandboxListOpts`].
     ///
     /// Note: defaults to listing only `Running` and `Paused` sandboxes (the JS

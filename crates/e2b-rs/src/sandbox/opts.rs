@@ -47,6 +47,17 @@ pub struct SandboxListOpts {
     pub connection: ConnectionConfigOpts,
 }
 
+/// Options for [`Sandbox::list_snapshots`](crate::Sandbox::list_snapshots).
+#[derive(Default)]
+pub struct SnapshotListOpts {
+    /// Only list snapshots created from this sandbox id.
+    pub sandbox_id: Option<String>,
+    /// Maximum number of snapshots per page.
+    pub limit: Option<u32>,
+    /// Connection configuration (API key, URL, domain, debug).
+    pub connection: ConnectionConfigOpts,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

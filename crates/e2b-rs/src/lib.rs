@@ -66,6 +66,7 @@ pub use sandbox::signature::{Signature, SignatureOperation, get_signature, get_s
 pub use sandbox::{
     Sandbox, SandboxConnectBuilder, SandboxConnectOpts, SandboxCreateBuilder, SandboxCreateOpts,
     SandboxInfo, SandboxListOpts, SandboxMetrics, SandboxPaginator, SandboxState, SnapshotInfo,
+    SnapshotListOpts, SnapshotPaginator,
 };
 
 pub mod paginator;
