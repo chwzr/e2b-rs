@@ -319,4 +319,26 @@ mod tests {
             .await;
         assert!(!fs_for(&server).make_dir("/d", None).await.expect("makedir"));
     }
+
+    #[tokio::test]
+    async fn rename_sends_source_then_destination() {
+        let server = MockServer::start().await;
+        // Locks the source/destination ordering (old_path -> source, new_path -> destination).
+        Mock::given(method("POST"))
+            .and(path("/filesystem.Filesystem/Move"))
+            .and(body_partial_json(
+                serde_json::json!({ "source": "/a.txt", "destination": "/b.txt" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "entry": entry_json("/b.txt") })),
+            )
+            .mount(&server)
+            .await;
+        let info = fs_for(&server)
+            .rename("/a.txt", "/b.txt", None)
+            .await
+            .expect("rename");
+        assert_eq!(info.path, "/b.txt");
+    }
 }
