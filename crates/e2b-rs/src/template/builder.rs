@@ -274,6 +274,155 @@ impl Template {
         self
     }
 
+    // ── Distro / runtime convenience variants ─────────────────────────────────
+
+    /// Use a Debian image as the base for this template.
+    ///
+    /// Equivalent to `from_image(&format!("debian:{variant}"))`. The JS SDK
+    /// defaults to `"stable"`; pass that string explicitly when you want the
+    /// same default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_debian_image("stable");
+    /// ```
+    pub fn from_debian_image(self, variant: &str) -> Self {
+        self.from_image(&format!("debian:{variant}"))
+    }
+
+    /// Use an Ubuntu image as the base for this template.
+    ///
+    /// Equivalent to `from_image(&format!("ubuntu:{variant}"))`. The JS SDK
+    /// defaults to `"latest"`; pass that string explicitly when you want the
+    /// same default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_ubuntu_image("latest");
+    /// ```
+    pub fn from_ubuntu_image(self, variant: &str) -> Self {
+        self.from_image(&format!("ubuntu:{variant}"))
+    }
+
+    /// Use a Python image as the base for this template.
+    ///
+    /// Equivalent to `from_image(&format!("python:{version}"))`. The JS SDK
+    /// defaults to `"3"`; pass that string explicitly when you want the same
+    /// default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_python_image("3.12");
+    /// ```
+    pub fn from_python_image(self, version: &str) -> Self {
+        self.from_image(&format!("python:{version}"))
+    }
+
+    /// Use a Node.js image as the base for this template.
+    ///
+    /// Equivalent to `from_image(&format!("node:{variant}"))`. The JS SDK
+    /// defaults to `"lts"`; pass that string explicitly when you want the same
+    /// default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_node_image("lts");
+    /// ```
+    pub fn from_node_image(self, variant: &str) -> Self {
+        self.from_image(&format!("node:{variant}"))
+    }
+
+    /// Use a Bun image as the base for this template.
+    ///
+    /// Equivalent to `from_image(&format!("oven/bun:{variant}"))`. The JS SDK
+    /// defaults to `"latest"`; pass that string explicitly when you want the
+    /// same default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_bun_image("latest");
+    /// ```
+    pub fn from_bun_image(self, variant: &str) -> Self {
+        self.from_image(&format!("oven/bun:{variant}"))
+    }
+
+    // ── Private-registry entry points ─────────────────────────────────────────
+
+    /// Use an image from Amazon ECR as the base for this template.
+    ///
+    /// Sets `base_image` to `image`, clears any previously set `base_template`,
+    /// and stores the provided AWS credentials as [`RegistryConfig::Aws`].
+    ///
+    /// The credentials are used by the E2B build backend to authenticate the
+    /// `docker pull` call; they are never stored in plaintext in logs (see
+    /// [`RegistryConfig`]'s `Debug` implementation).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_aws_registry(
+    ///     "123456789.dkr.ecr.us-east-1.amazonaws.com/my-image:latest",
+    ///     "AKIAIOSFODNN7EXAMPLE",
+    ///     "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    ///     "us-east-1",
+    /// );
+    /// ```
+    pub fn from_aws_registry(
+        mut self,
+        image: &str,
+        access_key_id: &str,
+        secret_access_key: &str,
+        region: &str,
+    ) -> Self {
+        self.base_image = Some(image.to_string());
+        self.base_template = None;
+        self.registry_config = Some(RegistryConfig::Aws {
+            access_key_id: access_key_id.to_string(),
+            secret_access_key: secret_access_key.to_string(),
+            region: region.to_string(),
+        });
+        self
+    }
+
+    /// Use an image from Google Container Registry or Artifact Registry as the
+    /// base for this template.
+    ///
+    /// Sets `base_image` to `image`, clears any previously set `base_template`,
+    /// and stores the provided GCP service-account JSON as
+    /// [`RegistryConfig::Gcp`].
+    ///
+    /// `service_account_json` must be the raw JSON content of a GCP
+    /// service-account key file (not a file path). The credentials are never
+    /// logged in plaintext (see [`RegistryConfig`]'s `Debug` implementation).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let sa_json = r#"{"type":"service_account","project_id":"my-proj"}"#;
+    /// let t = Template::new()
+    ///     .from_gcp_registry("gcr.io/my-proj/my-image:latest", sa_json);
+    /// ```
+    pub fn from_gcp_registry(mut self, image: &str, service_account_json: &str) -> Self {
+        self.base_image = Some(image.to_string());
+        self.base_template = None;
+        self.registry_config = Some(RegistryConfig::Gcp {
+            service_account_json: service_account_json.to_string(),
+        });
+        self
+    }
+
     /// Parse a Dockerfile and configure this template from it.
     ///
     /// The content string must be the raw Dockerfile text (not a path). The
@@ -1097,6 +1246,101 @@ CMD npm start
         assert_eq!(info.template_id, "tpl_tag");
         assert_eq!(info.name.as_deref(), Some("my-env:v1"));
         assert_eq!(info.alias.as_deref(), Some("my-env:v1"));
+    }
+
+    // ── from_*_image builder variants ────────────────────────────────────────
+
+    #[test]
+    fn from_python_image_sets_base() {
+        let t = Template::new().from_python_image("3.12");
+        assert_eq!(t.base_image.as_deref(), Some("python:3.12"));
+        assert_eq!(t.base_template, None);
+    }
+
+    #[test]
+    fn from_debian_image_sets_base() {
+        let t = Template::new().from_debian_image("stable");
+        assert_eq!(t.base_image.as_deref(), Some("debian:stable"));
+        assert_eq!(t.base_template, None);
+    }
+
+    #[test]
+    fn from_ubuntu_image_sets_base() {
+        let t = Template::new().from_ubuntu_image("latest");
+        assert_eq!(t.base_image.as_deref(), Some("ubuntu:latest"));
+        assert_eq!(t.base_template, None);
+    }
+
+    #[test]
+    fn from_node_image_sets_base() {
+        let t = Template::new().from_node_image("lts");
+        assert_eq!(t.base_image.as_deref(), Some("node:lts"));
+        assert_eq!(t.base_template, None);
+    }
+
+    #[test]
+    fn from_bun_image_sets_base() {
+        let t = Template::new().from_bun_image("latest");
+        assert_eq!(t.base_image.as_deref(), Some("oven/bun:latest"));
+        assert_eq!(t.base_template, None);
+    }
+
+    #[test]
+    fn from_image_variants_clear_base_template() {
+        // Verify that each from_*_image clears a previously set base_template.
+        let t = Template::new()
+            .from_template("old-tpl")
+            .from_python_image("3.11");
+        assert_eq!(t.base_template, None);
+        assert_eq!(t.base_image.as_deref(), Some("python:3.11"));
+    }
+
+    // ── from_aws_registry / from_gcp_registry ────────────────────────────────
+
+    #[test]
+    fn from_aws_registry_sets_config() {
+        let t = Template::new().from_aws_registry(
+            "123456789.dkr.ecr.us-east-1.amazonaws.com/my-image:latest",
+            "AKID_TEST",
+            "SECRET_TEST",
+            "us-east-1",
+        );
+        assert_eq!(
+            t.base_image.as_deref(),
+            Some("123456789.dkr.ecr.us-east-1.amazonaws.com/my-image:latest")
+        );
+        assert_eq!(t.base_template, None);
+        match t.registry_config {
+            Some(RegistryConfig::Aws {
+                access_key_id,
+                secret_access_key,
+                region,
+            }) => {
+                assert_eq!(access_key_id, "AKID_TEST");
+                assert_eq!(secret_access_key, "SECRET_TEST");
+                assert_eq!(region, "us-east-1");
+            }
+            other => panic!("expected RegistryConfig::Aws, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_gcp_registry_sets_config() {
+        let sa_json = r#"{"type":"service_account","project_id":"my-proj"}"#;
+        let t = Template::new().from_gcp_registry("gcr.io/my-proj/my-image:latest", sa_json);
+        assert_eq!(
+            t.base_image.as_deref(),
+            Some("gcr.io/my-proj/my-image:latest")
+        );
+        assert_eq!(t.base_template, None);
+        match t.registry_config {
+            Some(RegistryConfig::Gcp {
+                service_account_json,
+            }) => {
+                assert_eq!(service_account_json, sa_json);
+            }
+            other => panic!("expected RegistryConfig::Gcp, got {other:?}"),
+        }
     }
 
     // ── default cpu/mem defaults (Fix 2) ──────────────────────────────────────
