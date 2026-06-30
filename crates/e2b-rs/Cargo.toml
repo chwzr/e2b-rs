@@ -28,7 +28,9 @@ pbjson-types = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 regress = { workspace = true }
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["sync", "time", "rt", "io-util"] }
+async-compression = { workspace = true }
+bytes = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
 async-stream = { workspace = true }

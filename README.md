@@ -25,6 +25,20 @@ println!("{}", sandbox.get_host(3000));
 sandbox.kill().await?;
 ```
 
+The filesystem API lets you read, write, and watch files inside the sandbox:
+
+```rust
+use e2b_rs::Sandbox;
+
+let sandbox = Sandbox::create().template("base").await?;
+sandbox.files().write("/tmp/hello.txt", b"hi".to_vec(), Default::default()).await?;
+let text = sandbox.files().read("/tmp/hello.txt", None).await?;
+let mut watch = sandbox.files().watch_dir("/tmp", Default::default()).await?;
+while let Some(event) = watch.next().await {
+    println!("{:?} {}", event.r#type, event.name);
+}
+```
+
 Control-plane extras are also available: pause/resume, metrics, snapshots
 (create/list/delete), network-rule updates, and signed upload/download URLs.
 

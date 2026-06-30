@@ -37,6 +37,23 @@
 //! # }
 //! ```
 //!
+//! ## Files
+//!
+//! ```no_run
+//! # async fn run() -> e2b_rs::Result<()> {
+//! use e2b_rs::Sandbox;
+//! let sandbox = Sandbox::create().template("base").await?;
+//! sandbox.files().write("/tmp/hello.txt", b"hi".to_vec(), Default::default()).await?;
+//! let text = sandbox.files().read("/tmp/hello.txt", None).await?;
+//! assert_eq!(text, "hi");
+//! let mut watch = sandbox.files().watch_dir("/tmp", Default::default()).await?;
+//! while let Some(event) = watch.next().await {
+//!     println!("{:?} {}", event.r#type, event.name);
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Resolving configuration
 //!
 //! ```
@@ -79,10 +96,11 @@ pub mod sandbox;
 
 pub use sandbox::signature::{Signature, SignatureOperation, get_signature, get_signature_now};
 pub use sandbox::{
+    EntryInfo, FileType, Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts,
     NetworkRule, Sandbox, SandboxConnectBuilder, SandboxConnectOpts, SandboxCreateBuilder,
     SandboxCreateOpts, SandboxInfo, SandboxListOpts, SandboxMetrics, SandboxNetworkUpdate,
     SandboxPaginator, SandboxState, SandboxUrlOpts, SnapshotInfo, SnapshotListOpts,
-    SnapshotPaginator,
+    SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry, WriteInfo,
 };
 
 pub mod paginator;

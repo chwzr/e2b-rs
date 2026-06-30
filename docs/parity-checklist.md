@@ -82,6 +82,18 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 | `sandbox.uploadUrl` / `downloadUrl` | `Sandbox::upload_url` / `download_url` | ✅ |
 | `sandbox.getMcpUrl` / `getMcpToken` / `create({mcp})` | _(deferred: needs files.read + hand-authored McpServer)_ | ⬜ |
 
+## Sandbox filesystem (Plan 3b)
+
+| JS (`sandbox.files.*`) | Rust (`sandbox.files().*`) | Status |
+|---|---|---|
+| `read` (text/bytes/stream) | `read` / `read_bytes` / `read_stream` | ✅ |
+| `write` (single, octet/multipart, gzip, metadata) | `write` | ✅ |
+| `write` (multi-file) | `write_files` | ✅ |
+| `list` | `list` (depth) | ✅ |
+| `exists` / `getInfo` | `exists` / `get_info` | ✅ |
+| `makeDir` / `remove` / `rename` | `make_dir` / `remove` / `rename` | ✅ |
+| `watchDir` (+ WatchHandle) | `watch_dir` → `WatchHandle` (mpsc) | ✅ |
+
 ## Sandbox & I/O (Plan 3, remaining) · Git & Volume (Plan 4) · Template (Plan 5)
 
 _Rows added as each milestone lands._

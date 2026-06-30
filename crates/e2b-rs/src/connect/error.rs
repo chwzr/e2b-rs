@@ -143,6 +143,7 @@ pub(crate) fn map_code_to_error(code: Code, message: String) -> Error {
         Code::ResourceExhausted => Error::RateLimit(message),
         Code::Unavailable => format_sandbox_timeout_error(message),
         Code::Canceled | Code::DeadlineExceeded => Error::Timeout(message),
+        Code::AlreadyExists => Error::Conflict(message),
         _ => Error::Sandbox(message),
     }
 }
@@ -217,6 +218,10 @@ mod tests {
         assert!(matches!(
             map_code_to_error(Code::Internal, "x".into()),
             Error::Sandbox(_)
+        ));
+        assert!(matches!(
+            map_code_to_error(Code::AlreadyExists, "x".into()),
+            Error::Conflict(_)
         ));
     }
 }
