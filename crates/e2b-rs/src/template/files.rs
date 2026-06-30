@@ -199,6 +199,30 @@ fn build_ignore_set(patterns: &[String]) -> Result<globset::GlobSet> {
         .map_err(|e| Error::Internal(format!("failed to build GlobSet: {e}")))
 }
 
+// ─── relative_posix ──────────────────────────────────────────────────────────
+
+/// Return the context-relative POSIX path of `path` (forward slashes).
+///
+/// Strips the `context` prefix from `path` and replaces any back-slashes with
+/// forward slashes so the result is a valid POSIX tar entry name on all
+/// platforms.
+///
+/// Used by [`calculate_files_hash`] and [`crate::template::archive`].
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Internal`] if `path` is not under `context`.
+pub(crate) fn relative_posix(path: &Path, context: &Path) -> Result<String> {
+    let rel = path.strip_prefix(context).map_err(|e| {
+        Error::Internal(format!(
+            "path \"{}\" is not under context \"{}\": {e}",
+            path.display(),
+            context.display()
+        ))
+    })?;
+    Ok(rel.to_string_lossy().replace('\\', "/"))
+}
+
 // ─── calculate_files_hash ─────────────────────────────────────────────────────
 
 /// Compute a deterministic SHA-256 (hex) hash of the files matching `src`
@@ -256,10 +280,7 @@ pub(crate) fn calculate_files_hash(
 
     for path in &files {
         // Context-relative POSIX path with forward slashes.
-        let rel = path
-            .strip_prefix(context)
-            .map_err(|e| Error::Internal(format!("unexpected prefix error: {e}")))?;
-        let rel_posix = rel.to_string_lossy().replace('\\', "/");
+        let rel_posix = relative_posix(path, context)?;
         hasher.update(rel_posix.as_bytes());
 
         // Detect symlinks via lstat.
