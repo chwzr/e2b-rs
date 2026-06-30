@@ -23,7 +23,11 @@ pub use filesystem::{
     EntryInfo, FileType, Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts,
     WatchHandle, WatchOpts, WriteEntry, WriteInfo,
 };
-pub use git::{GitBranches, GitConfigScope, GitFileStatus, GitStatus, GitStatusLabel};
+pub use git::{
+    Git, GitAddOpts, GitBranches, GitCommitOpts, GitConfigOpts, GitConfigScope,
+    GitDeleteBranchOpts, GitFileStatus, GitInitOpts, GitRemoteAddOpts, GitRequestOpts,
+    GitResetMode, GitResetOpts, GitRestoreOpts, GitStatus, GitStatusLabel,
+};
 pub use network::{NetworkRule, SandboxNetworkUpdate};
 pub use opts::{
     SandboxConnectOpts, SandboxCreateOpts, SandboxListOpts, SandboxUrlOpts, SnapshotListOpts,

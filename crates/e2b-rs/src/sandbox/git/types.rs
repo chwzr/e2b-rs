@@ -16,7 +16,7 @@ pub enum GitConfigScope {
 /// Normalized status label derived from the git porcelain index/worktree codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitStatusLabel {
-    /// The file has a merge conflict (`U` code or `AA`/`UU` pair).
+    /// The file has a merge conflict (at least one status code is `U`).
     Conflict,
     /// The file was renamed (`R` code).
     Renamed,
