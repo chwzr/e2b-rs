@@ -124,9 +124,9 @@ pub mod template;
 
 pub use template::{
     BuildHandle, BuildInfo, BuildOptions, BuildStatus, BuildStatusReason, CopyItem, Instruction,
-    InstructionType, LogEntry, LogEntryLevel, ReadyCmd, RegistryConfig, Template,
-    TemplateBuildStatusResponse, TemplateTag, wait_for_file, wait_for_port, wait_for_process,
-    wait_for_timeout, wait_for_url,
+    InstructionType, LogEntry, LogEntryLevel, ReadyCmd, RegistryConfig, Template, TemplateApiOpts,
+    TemplateBuildStatusResponse, TemplateTag, TemplateTagInfo, wait_for_file, wait_for_port,
+    wait_for_process, wait_for_timeout, wait_for_url,
 };
 
 pub(crate) mod api;
