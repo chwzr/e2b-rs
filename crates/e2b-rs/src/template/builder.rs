@@ -702,8 +702,9 @@ fn apply_action(mut template: Template, action: DockerfileAction) -> Template {
 /// Names without a colon return `(name, None)`.
 fn normalize_build_name(raw: &str) -> (String, Option<String>) {
     match raw.split_once(':') {
-        Some((n, t)) if !n.is_empty() && !t.is_empty() => (n.to_string(), Some(t.to_string())),
-        _ => (raw.to_string(), None),
+        // Strip the colon from the name; an empty tag (e.g. `"name:"`) yields no tag.
+        Some((n, t)) => (n.to_string(), (!t.is_empty()).then(|| t.to_string())),
+        None => (raw.to_string(), None),
     }
 }
 
@@ -1072,7 +1073,7 @@ CMD npm start
         // Empty tag after colon → treated as no tag (whole string is the name).
         assert_eq!(
             normalize_build_name("my-env:"),
-            ("my-env:".to_string(), None)
+            ("my-env".to_string(), None)
         );
     }
 
