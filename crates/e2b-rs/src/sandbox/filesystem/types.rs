@@ -94,7 +94,7 @@ pub struct WriteInfo {
     pub metadata: BTreeMap<String, String>,
 }
 
-/// One entry in a multi-file batched upload (see [`Filesystem`]).
+/// One entry in a multi-file batched upload (see [`crate::Filesystem`]).
 #[derive(Debug, Clone)]
 pub struct WriteEntry {
     /// Destination path in the sandbox.
