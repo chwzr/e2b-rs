@@ -24,9 +24,9 @@ pub use filesystem::{
     WatchHandle, WatchOpts, WriteEntry, WriteInfo,
 };
 pub use git::{
-    Git, GitAddOpts, GitBranches, GitCommitOpts, GitConfigOpts, GitConfigScope,
-    GitDeleteBranchOpts, GitFileStatus, GitInitOpts, GitRemoteAddOpts, GitRequestOpts,
-    GitResetMode, GitResetOpts, GitRestoreOpts, GitStatus, GitStatusLabel,
+    Git, GitAddOpts, GitBranches, GitCloneOpts, GitCommitOpts, GitConfigOpts, GitConfigScope,
+    GitDeleteBranchOpts, GitFileStatus, GitInitOpts, GitPullOpts, GitPushOpts, GitRemoteAddOpts,
+    GitRequestOpts, GitResetMode, GitResetOpts, GitRestoreOpts, GitStatus, GitStatusLabel,
 };
 pub use network::{NetworkRule, SandboxNetworkUpdate};
 pub use opts::{

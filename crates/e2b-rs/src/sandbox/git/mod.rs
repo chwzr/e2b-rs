@@ -11,10 +11,15 @@ pub(crate) mod util;
 pub use types::{GitBranches, GitConfigScope, GitFileStatus, GitStatus, GitStatusLabel};
 
 use std::collections::BTreeMap;
+use std::future::Future;
 
 use crate::errors::{Error, Result};
 use crate::sandbox::commands::{CommandResult, CommandStartOpts, Commands};
-use crate::sandbox::git::util::build_git_command;
+use crate::sandbox::git::util::{
+    build_auth_error_message, build_git_command, build_push_args, build_upstream_error_message,
+    derive_repo_dir_from_url, is_auth_failure, is_missing_upstream, strip_credentials,
+    with_credentials,
+};
 
 // ---------------------------------------------------------------------------
 // Private helpers
@@ -200,6 +205,85 @@ pub struct GitConfigOpts {
     pub user: Option<String>,
 }
 
+/// Options for [`Git::clone`].
+#[derive(Default)]
+pub struct GitCloneOpts {
+    /// Branch to clone (`--branch <b> --single-branch`).
+    pub branch: Option<String>,
+    /// Shallow-clone depth (`--depth <n>`).
+    pub depth: Option<u32>,
+    /// Local destination path. When omitted the directory is derived from the
+    /// URL (e.g. `repo` from `https://h/user/repo.git`). Required when using
+    /// credentials without storing them and the URL has no derivable name.
+    pub path: Option<String>,
+    /// Username for HTTP(S) authentication. Embedded into the clone URL.
+    pub username: Option<String>,
+    /// Password / token for HTTP(S) authentication. Embedded into the clone URL.
+    /// Requires [`GitCloneOpts::username`].
+    pub password: Option<String>,
+    /// When `true`, the embedded credentials are left in the repository's
+    /// `origin` remote URL after cloning. **Use with caution** — anyone with
+    /// read access to the repository can recover the credentials from
+    /// `.git/config`.
+    ///
+    /// When `false` (default) the credentials are stripped from the remote URL
+    /// via `git remote set-url origin <sanitized>` immediately after cloning.
+    pub dangerously_store_credentials: bool,
+    /// Run as this sandbox user.
+    pub user: Option<String>,
+}
+
+/// Options for [`Git::push`].
+pub struct GitPushOpts {
+    /// Remote to push to (e.g. `"origin"`). Resolved automatically when only
+    /// one remote exists and credentials are in use.
+    pub remote: Option<String>,
+    /// Branch to push. When omitted, git uses its default tracking branch.
+    pub branch: Option<String>,
+    /// Add `--set-upstream <remote>` to the push command so subsequent
+    /// `git pull` / `git push` commands work without arguments.
+    ///
+    /// Defaults to `true`, matching the JS SDK default.
+    pub set_upstream: bool,
+    /// Username for HTTP(S) authentication.
+    pub username: Option<String>,
+    /// Password / token for HTTP(S) authentication. Requires
+    /// [`GitPushOpts::username`].
+    pub password: Option<String>,
+    /// Run as this sandbox user.
+    pub user: Option<String>,
+}
+
+impl Default for GitPushOpts {
+    fn default() -> Self {
+        GitPushOpts {
+            remote: None,
+            branch: None,
+            set_upstream: true, // JS default: setUpstream = true
+            username: None,
+            password: None,
+            user: None,
+        }
+    }
+}
+
+/// Options for [`Git::pull`].
+#[derive(Default)]
+pub struct GitPullOpts {
+    /// Remote to pull from (e.g. `"origin"`). When `None` and `branch` is
+    /// also `None`, an upstream tracking branch must already be configured.
+    pub remote: Option<String>,
+    /// Branch to pull. When `None`, git uses the tracking branch.
+    pub branch: Option<String>,
+    /// Username for HTTP(S) authentication.
+    pub username: Option<String>,
+    /// Password / token for HTTP(S) authentication. Requires
+    /// [`GitPullOpts::username`].
+    pub password: Option<String>,
+    /// Run as this sandbox user.
+    pub user: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Git struct
 // ---------------------------------------------------------------------------
@@ -238,9 +322,394 @@ impl Git {
         self.commands.run(cmd, Self::make_run_opts(user)).await
     }
 
+    /// Retrieve the current URL for `remote` in the repository at `path`.
+    ///
+    /// Returns [`Error::InvalidArgument`] when `git remote get-url` succeeds
+    /// but produces no output (remote exists without a URL).
+    async fn get_remote_url(
+        &self,
+        path: &str,
+        remote: &str,
+        user: Option<String>,
+    ) -> Result<String> {
+        let cmd = build_git_command(&["remote", "get-url", remote], Some(path));
+        let result = self.run_cmd(&cmd, user).await?;
+        let url = result.stdout.trim().to_string();
+        if url.is_empty() {
+            return Err(Error::InvalidArgument(format!(
+                "Remote \"{remote}\" URL not found in repository."
+            )));
+        }
+        Ok(url)
+    }
+
+    /// Resolve `remote` to a concrete remote name.
+    ///
+    /// When `remote` is already `Some`, it is returned as-is. Otherwise the
+    /// repository's remote list is fetched; if exactly one remote exists that
+    /// name is returned. Multiple remotes (or none) result in
+    /// [`Error::InvalidArgument`].
+    async fn resolve_remote_name(
+        &self,
+        path: &str,
+        remote: Option<&str>,
+        user: Option<String>,
+    ) -> Result<String> {
+        if let Some(r) = remote {
+            return Ok(r.to_string());
+        }
+        let cmd = build_git_command(&["remote"], Some(path));
+        let result = self.run_cmd(&cmd, user).await?;
+        let remotes: Vec<&str> = result
+            .stdout
+            .split('\n')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if remotes.len() == 1 {
+            return Ok(remotes[0].to_string());
+        }
+        Err(Error::InvalidArgument(
+            "Remote is required when using username/password and the repository \
+             has multiple remotes."
+                .to_string(),
+        ))
+    }
+
+    /// Return `true` when the current branch at `path` has an upstream tracking
+    /// branch configured.
+    ///
+    /// Mirrors the JS `hasUpstream` which catches `CommandExitError` and returns
+    /// `false`; in Rust our commands return `Ok` on non-zero exit, so we check
+    /// `exit_code == 0` instead.
+    async fn has_upstream(&self, path: &str, user: Option<String>) -> Result<bool> {
+        let cmd = build_git_command(
+            &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            Some(path),
+        );
+        let result = self.run_cmd(&cmd, user).await?;
+        Ok(result.exit_code == 0 && !result.stdout.trim().is_empty())
+    }
+
+    /// Temporarily replace `remote`'s URL with a credentialed URL, run `op`,
+    /// then restore the original URL.
+    ///
+    /// Port of `withRemoteCredentials` from `git/index.ts`. The restore step
+    /// is **always** executed — even when `op` fails — mirroring the JS
+    /// try/finally-like pattern.
+    ///
+    /// **Note:** `op` is expected to return `Ok(CommandResult)` even on
+    /// non-zero git exit (the SDK's Ok-on-nonzero rule); the only `Err` case
+    /// from `op` is a transport failure.  Auth/upstream error mapping is
+    /// therefore NOT applied inside this helper — the calling code (the
+    /// non-credentialed path of [`Git::push`] / [`Git::pull`]) handles it.
+    /// This is a faithful port of the JS asymmetry; see the task-3 report.
+    async fn with_remote_credentials<Fut>(
+        &self,
+        path: &str,
+        remote: &str,
+        username: &str,
+        password: &str,
+        run_user: Option<String>,
+        op: Fut,
+    ) -> Result<CommandResult>
+    where
+        Fut: Future<Output = Result<CommandResult>> + Send,
+    {
+        let original_url = self.get_remote_url(path, remote, run_user.clone()).await?;
+        let cred_url = with_credentials(&original_url, Some(username), Some(password))?;
+
+        // Set credentialed URL.
+        let set_cmd = build_git_command(&["remote", "set-url", remote, &cred_url], Some(path));
+        self.run_cmd(&set_cmd, run_user.clone()).await?;
+
+        // Run the operation, capturing any error.
+        let op_result = op.await;
+
+        // Always restore the original URL.
+        let restore_cmd =
+            build_git_command(&["remote", "set-url", remote, &original_url], Some(path));
+        let restore_result = self.run_cmd(&restore_cmd, run_user).await;
+
+        // Op error takes priority; then restore error.
+        match (op_result, restore_result) {
+            (Err(op_err), _) => Err(op_err),
+            (Ok(_), Err(restore_err)) => Err(restore_err),
+            (Ok(result), Ok(_)) => Ok(result),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Public methods
     // -----------------------------------------------------------------------
+
+    /// Clone a git repository into the sandbox.
+    ///
+    /// Credentials (if provided) are embedded into the clone URL. Unless
+    /// `opts.dangerously_store_credentials` is `true`, the credentials are
+    /// stripped from the `origin` remote URL immediately after a successful
+    /// clone via `git remote set-url origin <sanitized>`.
+    ///
+    /// A non-zero git exit whose output indicates an authentication failure is
+    /// mapped to [`Error::GitAuth`]. All other non-zero exits are returned as
+    /// `Ok(CommandResult)` per the SDK's Ok-on-nonzero rule.
+    ///
+    /// Equivalent to:
+    /// `git clone [--branch <b> --single-branch] [--depth <n>] <url> [<path>]`
+    pub async fn clone(&self, url: &str, opts: GitCloneOpts) -> Result<CommandResult> {
+        let GitCloneOpts {
+            username,
+            password,
+            branch,
+            depth,
+            path,
+            dangerously_store_credentials,
+            user,
+        } = opts;
+
+        if password.is_some() && username.is_none() {
+            return Err(Error::InvalidArgument(
+                "Username is required when using a password or token for git clone.".to_string(),
+            ));
+        }
+
+        // Build the URL with embedded credentials when both are provided.
+        let url_with_creds = if username.is_some() && password.is_some() {
+            with_credentials(url, username.as_deref(), password.as_deref())?
+        } else {
+            url.to_string()
+        };
+
+        // Determine whether to strip credentials after cloning.
+        let sanitized = strip_credentials(&url_with_creds);
+        let strip_inline = !dangerously_store_credentials && sanitized != url_with_creds;
+
+        // Derive the local destination path.
+        let repo_path = if strip_inline {
+            path.or_else(|| derive_repo_dir_from_url(url))
+        } else {
+            path
+        };
+
+        if strip_inline && repo_path.is_none() {
+            return Err(Error::InvalidArgument(
+                "A destination path is required when using credentials without storing them."
+                    .to_string(),
+            ));
+        }
+
+        // Build the clone argument list.
+        // Note: `git clone` uses a positional <path> argument, not `-C`.
+        let mut args: Vec<String> = vec!["clone".to_string(), url_with_creds];
+        if let Some(ref b) = branch {
+            args.push("--branch".to_string());
+            args.push(b.clone());
+            args.push("--single-branch".to_string());
+        }
+        if let Some(d) = depth {
+            args.push("--depth".to_string());
+            args.push(d.to_string());
+        }
+        if let Some(ref p) = repo_path {
+            args.push(p.clone());
+        }
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let cmd = build_git_command(&refs, None); // no -C; path is positional
+        let result = self.run_cmd(&cmd, user.clone()).await?;
+
+        // Non-zero exit: map auth failures; return all others as Ok.
+        if result.exit_code != 0 {
+            if is_auth_failure(&result) {
+                return Err(Error::GitAuth(build_auth_error_message(
+                    "clone",
+                    username.is_some() && password.is_none(),
+                )));
+            }
+            return Ok(result);
+        }
+
+        // Exit 0 + strip_inline: reset origin to the sanitized URL.
+        if strip_inline && let Some(ref rp) = repo_path {
+            let set_url_cmd =
+                build_git_command(&["remote", "set-url", "origin", &sanitized], Some(rp));
+            self.run_cmd(&set_url_cmd, user).await?;
+        }
+
+        Ok(result)
+    }
+
+    /// Push commits to a remote.
+    ///
+    /// When credentials are provided, the remote URL is temporarily replaced
+    /// with a credentialed URL via `git remote set-url`, the push is run, then
+    /// the original URL is restored.
+    ///
+    /// Non-zero exits on the **non-credentialed** path are mapped:
+    /// - Auth failures → [`Error::GitAuth`].
+    /// - Missing upstream → [`Error::GitUpstream`].
+    ///
+    /// **Note:** On the credentialed path, auth/upstream mapping is NOT applied
+    /// (faithful port of the JS SDK asymmetry — see task-3 report for details).
+    ///
+    /// Equivalent to:
+    /// `git -C <path> push [--set-upstream <remote>] [<remote>] [<branch>]`
+    pub async fn push(&self, path: &str, opts: GitPushOpts) -> Result<CommandResult> {
+        let GitPushOpts {
+            remote,
+            branch,
+            set_upstream,
+            username,
+            password,
+            user,
+        } = opts;
+
+        if password.is_some() && username.is_none() {
+            return Err(Error::InvalidArgument(
+                "Username is required when using a password or token for git push.".to_string(),
+            ));
+        }
+
+        let missing_password = username.is_some() && password.is_none();
+
+        // Credentialed path: use with_remote_credentials.
+        if let (Some(uname), Some(pword)) = (username.as_deref(), password.as_deref()) {
+            let remote_name = self
+                .resolve_remote_name(path, remote.as_deref(), user.clone())
+                .await?;
+            let commands = self.commands.clone();
+            let run_user_for_op = user.clone();
+            let push_args = build_push_args(
+                Some(&remote_name),
+                remote.as_deref(),
+                branch.as_deref(),
+                set_upstream,
+            );
+            let refs_owned: Vec<String> = push_args;
+            let refs: Vec<&str> = refs_owned.iter().map(String::as_str).collect();
+            let push_cmd = build_git_command(&refs, Some(path));
+            // Move owned data into the async block to avoid borrow-after-return.
+            let op = async move {
+                commands
+                    .run(&push_cmd, Git::make_run_opts(run_user_for_op))
+                    .await
+            };
+            // CONCERN: The credentialed push path does NOT map auth/upstream
+            // failures — faithful to the JS SDK asymmetry.  See task-3 report.
+            return self
+                .with_remote_credentials(path, &remote_name, uname, pword, user, op)
+                .await;
+        }
+
+        // Non-credentialed path: build args without an explicit remote name.
+        let push_args = build_push_args(None, remote.as_deref(), branch.as_deref(), set_upstream);
+        let refs: Vec<&str> = push_args.iter().map(String::as_str).collect();
+        let cmd = build_git_command(&refs, Some(path));
+        let result = self.run_cmd(&cmd, user).await?;
+
+        if result.exit_code != 0 {
+            if is_auth_failure(&result) {
+                return Err(Error::GitAuth(build_auth_error_message(
+                    "push",
+                    missing_password,
+                )));
+            }
+            if is_missing_upstream(&result) {
+                return Err(Error::GitUpstream(build_upstream_error_message("push")));
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Pull changes from a remote.
+    ///
+    /// When both `remote` and `branch` are `None`, the current branch must have
+    /// an upstream tracking branch configured — otherwise [`Error::GitUpstream`]
+    /// is returned before any git command runs.
+    ///
+    /// When credentials are provided the remote URL is temporarily replaced via
+    /// `git remote set-url` (see [`Git::push`] for the full credential dance).
+    ///
+    /// **Note:** Auth/upstream mapping applies only on the non-credentialed path.
+    /// See the DONE_WITH_CONCERNS note in task-3-report.md.
+    ///
+    /// Equivalent to:
+    /// `git -C <path> pull [<remote>] [<branch>]`
+    pub async fn pull(&self, path: &str, opts: GitPullOpts) -> Result<CommandResult> {
+        let GitPullOpts {
+            remote,
+            branch,
+            username,
+            password,
+            user,
+        } = opts;
+
+        if password.is_some() && username.is_none() {
+            return Err(Error::InvalidArgument(
+                "Username is required when using a password or token for git pull.".to_string(),
+            ));
+        }
+
+        let missing_password = username.is_some() && password.is_none();
+
+        // No remote and no branch: ensure an upstream tracking branch exists.
+        if remote.is_none() && branch.is_none() && !self.has_upstream(path, user.clone()).await? {
+            return Err(Error::GitUpstream(build_upstream_error_message("pull")));
+        }
+
+        // Credentialed path.
+        if let (Some(uname), Some(pword)) = (username.as_deref(), password.as_deref()) {
+            let remote_name = self
+                .resolve_remote_name(path, remote.as_deref(), user.clone())
+                .await?;
+            let commands = self.commands.clone();
+            let run_user_for_op = user.clone();
+
+            // Build pull args using remote_name (credentialed).
+            let mut pull_args: Vec<String> = vec!["pull".to_string()];
+            pull_args.push(remote_name.clone());
+            if let Some(b) = branch.as_deref() {
+                pull_args.push(b.to_string());
+            }
+            let refs: Vec<&str> = pull_args.iter().map(String::as_str).collect();
+            let pull_cmd = build_git_command(&refs, Some(path));
+            let op = async move {
+                commands
+                    .run(&pull_cmd, Git::make_run_opts(run_user_for_op))
+                    .await
+            };
+            // CONCERN: Same asymmetry as push — no auth/upstream mapping here.
+            return self
+                .with_remote_credentials(path, &remote_name, uname, pword, user, op)
+                .await;
+        }
+
+        // Non-credentialed path.
+        let mut pull_args: Vec<String> = vec!["pull".to_string()];
+        if let Some(r) = remote.as_deref() {
+            pull_args.push(r.to_string());
+        }
+        if let Some(b) = branch.as_deref() {
+            pull_args.push(b.to_string());
+        }
+        let refs: Vec<&str> = pull_args.iter().map(String::as_str).collect();
+        let cmd = build_git_command(&refs, Some(path));
+        let result = self.run_cmd(&cmd, user).await?;
+
+        if result.exit_code != 0 {
+            if is_auth_failure(&result) {
+                return Err(Error::GitAuth(build_auth_error_message(
+                    "pull",
+                    missing_password,
+                )));
+            }
+            if is_missing_upstream(&result) {
+                return Err(Error::GitUpstream(build_upstream_error_message("pull")));
+            }
+        }
+
+        Ok(result)
+    }
 
     /// Initialize a new git repository at `path`.
     ///
@@ -605,6 +1074,147 @@ mod tests {
             )
             .mount(server)
             .await;
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 3: clone / push / pull tests (written before implementation — TDD RED)
+    // -----------------------------------------------------------------------
+
+    /// Build a process stream body with a stderr Data frame followed by an End
+    /// event.  Used to simulate git command failures with diagnostic output.
+    fn proc_stream_with_stderr(exit_code: i32, stderr_b64: &str) -> Vec<u8> {
+        let mut body = encode_envelope(0, br#"{"event":{"start":{"pid":7}}}"#);
+        body.extend(encode_envelope(
+            0,
+            format!(r#"{{"event":{{"data":{{"stderr":"{stderr_b64}"}}}}}}"#).as_bytes(),
+        ));
+        body.extend(encode_envelope(
+            0,
+            format!(
+                r#"{{"event":{{"end":{{"exitCode":{exit_code},"exited":true,"status":"exited"}}}}}}"#
+            )
+            .as_bytes(),
+        ));
+        body.extend(encode_envelope(FLAG_END_STREAM, b"{}"));
+        body
+    }
+
+    /// Mount a single mock for `/process.Process/Start` that streams stderr
+    /// output followed by a non-zero exit.
+    async fn mount_proc_with_stderr(server: &MockServer, exit_code: i32, stderr_b64: &str) {
+        Mock::given(method("POST"))
+            .and(path("/process.Process/Start"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/connect+json")
+                    .set_body_bytes(proc_stream_with_stderr(exit_code, stderr_b64)),
+            )
+            .mount(server)
+            .await;
+    }
+
+    /// `git clone` with credentials on a private repo that returns an auth
+    /// failure stderr message must map to `Err(Error::GitAuth(_))`.
+    #[tokio::test]
+    async fn clone_auth_failure_returns_git_auth_err() {
+        let server = MockServer::start().await;
+        // base64("fatal: Authentication failed")
+        mount_proc_with_stderr(&server, 128, "ZmF0YWw6IEF1dGhlbnRpY2F0aW9uIGZhaWxlZA==").await;
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+        let err = git
+            .clone(
+                "https://github.com/private/repo.git",
+                GitCloneOpts {
+                    username: Some("u".to_string()),
+                    password: Some("p".to_string()),
+                    // Store creds so no post-clone set-url is attempted (avoids
+                    // second mock call, keeping the test simple).
+                    dangerously_store_credentials: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("auth failure must be Err");
+        assert!(
+            matches!(err, crate::errors::Error::GitAuth(_)),
+            "expected GitAuth, got {err:?}"
+        );
+    }
+
+    /// A successful `git clone` (exit 0) returns `Ok(CommandResult)`.
+    #[tokio::test]
+    async fn clone_happy_path_returns_ok() {
+        let server = MockServer::start().await;
+        mount_proc(&server, 0).await;
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+        let result = git
+            .clone(
+                "https://github.com/public/repo.git",
+                GitCloneOpts {
+                    // Use dangerously_store_credentials=true to suppress the
+                    // post-clone set-url command (keeps the mock simple).
+                    dangerously_store_credentials: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("clone ok");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    /// Supplying credentials with `dangerously_store_credentials=false` and no
+    /// resolvable destination path must return `Err(Error::InvalidArgument)`
+    /// **before** any network round-trip.
+    #[tokio::test]
+    async fn clone_missing_path_guard_fires_before_network() {
+        let server = MockServer::start().await;
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+        // "https://h/" has no URL path segment → derive_repo_dir_from_url returns None.
+        let err = git
+            .clone(
+                "https://h/",
+                GitCloneOpts {
+                    username: Some("u".to_string()),
+                    password: Some("p".to_string()),
+                    dangerously_store_credentials: false,
+                    path: None,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("missing-path guard");
+        assert!(
+            matches!(err, crate::errors::Error::InvalidArgument(_)),
+            "expected InvalidArgument, got {err:?}"
+        );
+        // Guard fires before any I/O — server must have received zero requests.
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "guard must fire before any network round-trip"
+        );
+    }
+
+    /// Non-credentialed `git push` whose stderr indicates a missing upstream
+    /// branch must map to `Err(Error::GitUpstream(_))`.
+    #[tokio::test]
+    async fn push_non_credentialed_upstream_error() {
+        let server = MockServer::start().await;
+        // base64("fatal: The current branch has no upstream branch.")
+        mount_proc_with_stderr(
+            &server,
+            128,
+            "ZmF0YWw6IFRoZSBjdXJyZW50IGJyYW5jaCBoYXMgbm8gdXBzdHJlYW0gYnJhbmNoLg==",
+        )
+        .await;
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+        let err = git
+            .push("/repo", GitPushOpts::default())
+            .await
+            .expect_err("upstream error must be Err");
+        assert!(
+            matches!(err, crate::errors::Error::GitUpstream(_)),
+            "expected GitUpstream, got {err:?}"
+        );
     }
 
     // -----------------------------------------------------------------------

@@ -412,6 +412,70 @@ pub(crate) fn parse_git_branches(output: &str) -> GitBranches {
 }
 
 // ---------------------------------------------------------------------------
+// Push helpers and error messages
+// ---------------------------------------------------------------------------
+
+/// Build the argument list for `git push`.
+///
+/// Port of `buildPushArgs` from `git/utils.ts`. `remote_name` is used in the
+/// credentialed path (already resolved via [`crate::sandbox::git::Git`]'s
+/// private `resolve_remote_name`); `remote` is the raw caller option used in
+/// the non-credentialed path. `--set-upstream` is added when `set_upstream`
+/// is `true` and a remote target is known.
+pub(crate) fn build_push_args(
+    remote_name: Option<&str>,
+    remote: Option<&str>,
+    branch: Option<&str>,
+    set_upstream: bool,
+) -> Vec<String> {
+    let mut args = vec!["push".to_string()];
+    let target_remote = remote_name.or(remote);
+    if set_upstream && target_remote.is_some() {
+        args.push("--set-upstream".to_string());
+    }
+    if let Some(r) = target_remote {
+        args.push(r.to_string());
+    }
+    if let Some(b) = branch {
+        args.push(b.to_string());
+    }
+    args
+}
+
+/// Build a human-readable error message for a git authentication failure.
+///
+/// Port of `buildAuthErrorMessage` from `git/utils.ts`.
+///
+/// Set `missing_password` to `true` when a username was supplied but no
+/// password — indicating the caller knows credentials are required but only
+/// provided half of them.
+pub(crate) fn build_auth_error_message(action: &str, missing_password: bool) -> String {
+    if missing_password {
+        format!("Git {action} requires a password/token for private repositories.")
+    } else {
+        format!("Git {action} requires credentials for private repositories.")
+    }
+}
+
+/// Build a human-readable error message for a missing upstream tracking branch.
+///
+/// Port of `buildUpstreamErrorMessage` from `git/utils.ts`.
+pub(crate) fn build_upstream_error_message(action: &str) -> String {
+    if action == "push" {
+        "Git push failed because no upstream branch is configured. \
+         Set upstream once with { setUpstream: true } (and optional remote/branch), \
+         or pass remote and branch explicitly."
+            .to_string()
+    } else {
+        "Git pull failed because no upstream branch is configured. \
+         Pass remote and branch explicitly, or set upstream once \
+         (push with { setUpstream: true } or run: \
+         git branch --set-upstream-to=origin/<branch> <branch>)."
+            .to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -505,5 +569,75 @@ mod tests {
         let b = parse_git_branches("main\t*\nfeature\t\n");
         assert_eq!(b.branches, vec!["main".to_string(), "feature".to_string()]);
         assert_eq!(b.current_branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn build_push_args_no_options() {
+        assert_eq!(build_push_args(None, None, None, false), vec!["push"]);
+    }
+
+    #[test]
+    fn build_push_args_set_upstream_and_remote() {
+        assert_eq!(
+            build_push_args(Some("origin"), None, Some("main"), true),
+            vec!["push", "--set-upstream", "origin", "main"],
+        );
+    }
+
+    #[test]
+    fn build_push_args_no_set_upstream_with_remote_option() {
+        assert_eq!(
+            build_push_args(None, Some("origin"), Some("main"), false),
+            vec!["push", "origin", "main"],
+        );
+    }
+
+    #[test]
+    fn build_push_args_set_upstream_false_ignores_flag() {
+        // set_upstream=false → no --set-upstream even with a remote
+        assert_eq!(
+            build_push_args(Some("upstream"), None, None, false),
+            vec!["push", "upstream"],
+        );
+    }
+
+    #[test]
+    fn build_push_args_remote_name_overrides_remote() {
+        // remote_name takes priority over remote
+        assert_eq!(
+            build_push_args(Some("upstream"), Some("origin"), None, true),
+            vec!["push", "--set-upstream", "upstream"],
+        );
+    }
+
+    #[test]
+    fn build_auth_error_message_without_missing_password() {
+        let msg = build_auth_error_message("clone", false);
+        assert!(msg.contains("clone"), "action in message");
+        assert!(msg.contains("requires credentials"), "correct variant");
+    }
+
+    #[test]
+    fn build_auth_error_message_with_missing_password() {
+        let msg = build_auth_error_message("push", true);
+        assert!(msg.contains("push"), "action in message");
+        assert!(msg.contains("requires a password/token"), "correct variant");
+    }
+
+    #[test]
+    fn build_upstream_error_message_push_vs_pull() {
+        let push_msg = build_upstream_error_message("push");
+        assert!(push_msg.contains("push"), "push action in message");
+        assert!(
+            push_msg.contains("setUpstream"),
+            "push hint mentions setUpstream"
+        );
+
+        let pull_msg = build_upstream_error_message("pull");
+        assert!(pull_msg.contains("pull"), "pull action in message");
+        assert!(
+            pull_msg.contains("--set-upstream-to"),
+            "pull hint mentions set-upstream-to"
+        );
     }
 }
