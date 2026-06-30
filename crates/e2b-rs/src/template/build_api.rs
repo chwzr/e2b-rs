@@ -199,6 +199,7 @@ pub(crate) async fn upload_build_context(
         files_hash: String,
         src: String,
         resolve_symlinks: bool,
+        force_upload: bool,
     }
 
     let work_items: Vec<WorkItem> = instructions
@@ -211,13 +212,17 @@ pub(crate) async fn upload_build_context(
                 files_hash,
                 src,
                 resolve_symlinks: i.resolve_symlinks,
+                force_upload: i.force_upload.unwrap_or(false),
             })
         })
         .collect();
 
     let upload_futures = work_items.iter().map(|item| async {
         let link = get_file_upload_link(api, template_id, &item.files_hash).await?;
-        if !link.present()
+        // Upload when the context is absent from the cache OR when the
+        // instruction forces it (`force_upload`) — matches the JS condition
+        // `(forceUpload && url) || (!present && url)` (index.ts:1182).
+        if (item.force_upload || !link.present())
             && let Some(url) = link.url().map(|u| u.to_owned())
         {
             let (archive, size) =
@@ -559,5 +564,65 @@ mod tests {
             .expect("upload_build_context must succeed when present");
 
         // wiremock asserts the expect(0) automatically on server drop.
+    }
+
+    // ── upload_build_context — force_upload overrides present ──────────────────
+
+    /// When the cache reports `present: true` but the instruction sets
+    /// `force_upload`, the archive must STILL be uploaded — matching the JS
+    /// `(forceUpload && url) || (!present && url)` condition.
+    #[tokio::test]
+    async fn upload_build_context_force_upload_uploads_even_when_present() {
+        let server = MockServer::start().await;
+
+        // Real context dir + file so the archive can be built.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let context = dir.path();
+        std::fs::write(context.join("app.js"), b"console.log('hi')").expect("write app.js");
+
+        let files_hash = "deadbeef00112233".to_string();
+        let get_url = format!("/templates/tpl_1/files/{files_hash}");
+        let put_path = "/upload/forced";
+
+        // present: true, but a url IS supplied — force_upload must override.
+        Mock::given(method("GET"))
+            .and(path(get_url))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "present": true,
+                "url": format!("{}{put_path}", server.uri())
+            })))
+            .mount(&server)
+            .await;
+
+        // PUT mock with expect(1) — the forced upload MUST be issued.
+        Mock::given(method("PUT"))
+            .and(path(put_path))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = api_client_for(&server);
+        let http = reqwest::Client::new();
+
+        let instr = Instruction {
+            instruction_type: InstructionType::Copy,
+            args: vec![
+                "app.js".to_string(),
+                "/app/app.js".to_string(),
+                String::new(),
+                String::new(),
+            ],
+            force: false,
+            force_upload: Some(true),
+            files_hash: Some(files_hash),
+            resolve_symlinks: false,
+        };
+
+        upload_build_context(&api, &http, "tpl_1", &[instr], context)
+            .await
+            .expect("upload_build_context must succeed with force_upload");
+
+        // wiremock asserts the expect(1) automatically on server drop.
     }
 }
