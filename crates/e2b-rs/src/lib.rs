@@ -74,6 +74,19 @@
 //! # }
 //! ```
 //!
+//! ## Git
+//!
+//! ```no_run
+//! # async fn run() -> e2b_rs::Result<()> {
+//! use e2b_rs::Sandbox;
+//! let sandbox = Sandbox::create().template("base").await?;
+//! sandbox.git().clone("https://github.com/owner/repo.git", Default::default()).await?;
+//! let status = sandbox.git().status("/home/user/repo", None).await?;
+//! println!("{:?}", status.current_branch);
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Resolving configuration
 //!
 //! ```
