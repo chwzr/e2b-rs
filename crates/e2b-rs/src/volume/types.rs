@@ -29,7 +29,7 @@ pub struct VolumeInfo {
 }
 
 /// A volume together with a short-lived Bearer token for the content API.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VolumeAndToken {
     /// Unique identifier for the volume.
     pub volume_id: String,
@@ -37,6 +37,16 @@ pub struct VolumeAndToken {
     pub name: String,
     /// Short-lived Bearer token; pass to `VolumeApiClient::new` when constructing a content client.
     pub token: String,
+}
+
+impl std::fmt::Debug for VolumeAndToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VolumeAndToken")
+            .field("volume_id", &self.volume_id)
+            .field("name", &self.name)
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Metadata for a single entry (file, directory, or symlink) inside a volume.
@@ -170,6 +180,32 @@ impl VolumeAndToken {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn volume_and_token_debug_redacts_token() {
+        let vt = VolumeAndToken {
+            volume_id: "vol_test123".to_string(),
+            name: "my-volume".to_string(),
+            token: "supersecret-token".to_string(),
+        };
+        let debug_str = format!("{vt:?}");
+        assert!(
+            !debug_str.contains("supersecret-token"),
+            "token must not appear in Debug output: {debug_str}"
+        );
+        assert!(
+            debug_str.contains("<redacted>"),
+            "Debug output must contain '<redacted>': {debug_str}"
+        );
+        assert!(
+            debug_str.contains("vol_test123"),
+            "volume_id must appear in Debug output: {debug_str}"
+        );
+        assert!(
+            debug_str.contains("my-volume"),
+            "name must appear in Debug output: {debug_str}"
+        );
+    }
 
     fn make_wire(
         type_: crate::volume::schema::VolumeEntryStatType,

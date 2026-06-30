@@ -24,7 +24,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS: u64 = REQUEST_TIMEOUT_MS;
 ///
 /// All fields are optional and fall back to environment variables where
 /// documented. This mirrors the JS `VolumeApiOpts` type.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Clone)]
 pub struct VolumeOpts {
     /// E2B API key. Falls back to the `E2B_API_KEY` environment variable.
     pub api_key: Option<String>,
@@ -43,13 +43,39 @@ pub struct VolumeOpts {
     pub proxy: Option<String>,
 }
 
+impl std::fmt::Debug for VolumeOpts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VolumeOpts")
+            .field(
+                "api_key",
+                if self.api_key.is_some() {
+                    &"<redacted>"
+                } else {
+                    &"None"
+                },
+            )
+            .field("domain", &self.domain)
+            .field("api_url", &self.api_url)
+            .field("request_timeout_ms", &self.request_timeout_ms)
+            .field(
+                "proxy",
+                if self.proxy.is_some() {
+                    &"<redacted>"
+                } else {
+                    &"None"
+                },
+            )
+            .finish()
+    }
+}
+
 /// A handle to an E2B persistent volume.
 ///
 /// Holds the resolved connection parameters used to build a content client
 /// (`VolumeApiClient`) in Tasks 3–4.
 ///
 /// Obtain a `Volume` via [`Volume::create`] or [`Volume::connect`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Volume {
     volume_id: String,
     name: String,
@@ -60,6 +86,26 @@ pub struct Volume {
     request_timeout_ms: u64,
     /// Optional HTTP/HTTPS proxy URL passed to [`crate::volume::client::VolumeApiClient`].
     proxy: Option<String>,
+}
+
+impl std::fmt::Debug for Volume {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Volume")
+            .field("volume_id", &self.volume_id)
+            .field("name", &self.name)
+            .field("token", &"<redacted>")
+            .field("api_url", &self.api_url)
+            .field("request_timeout_ms", &self.request_timeout_ms)
+            .field(
+                "proxy",
+                if self.proxy.is_some() {
+                    &"<redacted>"
+                } else {
+                    &"None"
+                },
+            )
+            .finish()
+    }
 }
 
 impl Volume {
@@ -166,11 +212,22 @@ impl Volume {
     /// Sends `GET /volumes/{volume_id}` and returns a [`VolumeAndToken`]
     /// containing the volume metadata and a short-lived Bearer token for the
     /// content API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::Error::NotFound`] with the message
+    /// `"Volume {volume_id} not found"` on HTTP 404, mirroring the JS SDK's
+    /// `NotFoundError` message.
     pub async fn get_info(volume_id: &str, opts: VolumeOpts) -> Result<VolumeAndToken> {
         let (api, _config) = Volume::build_api_client(&opts)?;
         let path = format!("/volumes/{volume_id}");
-        let res: api_schema::VolumeAndToken =
-            api.request(reqwest::Method::GET, &path, &[], None).await?;
+        let res: api_schema::VolumeAndToken = api
+            .request(reqwest::Method::GET, &path, &[], None)
+            .await
+            .map_err(|e| match e {
+                Error::NotFound(_) => Error::NotFound(format!("Volume {volume_id} not found")),
+                other => other,
+            })?;
         Ok(VolumeAndToken::from_wire(res))
     }
 
@@ -178,14 +235,25 @@ impl Volume {
     ///
     /// Sends `GET /volumes/{volume_id}` to obtain a fresh bearer token and
     /// builds a [`Volume`] handle from the result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::Error::NotFound`] with the message
+    /// `"Volume {volume_id} not found"` on HTTP 404, mirroring the JS SDK's
+    /// `NotFoundError` message.
     pub async fn connect(volume_id: &str, opts: VolumeOpts) -> Result<Volume> {
         let (api, config) = Volume::build_api_client(&opts)?;
         let request_timeout_ms = opts
             .request_timeout_ms
             .unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS);
         let path = format!("/volumes/{volume_id}");
-        let res: api_schema::VolumeAndToken =
-            api.request(reqwest::Method::GET, &path, &[], None).await?;
+        let res: api_schema::VolumeAndToken = api
+            .request(reqwest::Method::GET, &path, &[], None)
+            .await
+            .map_err(|e| match e {
+                Error::NotFound(_) => Error::NotFound(format!("Volume {volume_id} not found")),
+                other => other,
+            })?;
         Ok(Volume::from_parts(
             volume_id.to_string(),
             res.name,
@@ -425,7 +493,7 @@ impl Volume {
         )
     }
 
-    /// Read the file at `path` and return its contents as a UTF-8 `String`.
+    /// Read the file at `path` and return its contents as a strict UTF-8 `String`.
     ///
     /// Sends `GET /volumecontent/{id}/file` with `path` as a query parameter.
     /// Uses the 1-hour file timeout (mirrors JS `readFile(path)` / `format: 'text'`).
@@ -435,8 +503,10 @@ impl Volume {
     /// Returns [`crate::errors::Error::NotFound`] with the message
     /// `"Path {path} not found"` on HTTP 404.
     ///
-    /// Returns [`crate::errors::Error::Internal`] if the file contents are not
-    /// valid UTF-8 (matches JS strict `.text()` decode behaviour).
+    /// Returns [`crate::errors::Error::Internal`] if the file bytes are not valid
+    /// UTF-8. This is a documented divergence from the JS SDK, whose Fetch
+    /// `.text()` decodes UTF-8 *lossily* (replacing invalid sequences with U+FFFD).
+    /// Use [`Self::read_file_bytes`] for non-UTF-8 or binary content.
     pub async fn read_file(&self, path: &str) -> Result<String> {
         let client = self.build_file_client()?;
         let endpoint = format!("/volumecontent/{}/file", self.volume_id);
@@ -711,7 +781,7 @@ mod tests {
         VolumeFileType, VolumeListOpts, VolumeMakeDirOpts, VolumeMetadataOpts, VolumeReadOpts,
         VolumeWriteOpts,
     };
-    use wiremock::matchers::query_param;
+    use wiremock::matchers::{body_bytes, query_param};
 
     /// Build a [`Volume`] pointing at the wiremock server with a test Bearer
     /// token, bypassing the control-plane API entirely.
@@ -1001,6 +1071,7 @@ mod tests {
             .and(query_param("uid", "1000"))
             .and(header("Authorization", "Bearer tkn"))
             .and(header("Content-Type", "application/octet-stream"))
+            .and(body_bytes(b"hello".to_vec()))
             .respond_with(ResponseTemplate::new(200).set_body_json(&response_json))
             .mount(&server)
             .await;
@@ -1019,6 +1090,115 @@ mod tests {
             .expect("write_file ok");
         assert_eq!(entry.file_type, VolumeFileType::File);
         assert_eq!(entry.path, "/a.txt");
+    }
+
+    // ── Debug-redaction tests ────────────────────────────────────────────────
+
+    #[test]
+    fn volume_debug_redacts_token_and_proxy() {
+        let vol = Volume::from_parts(
+            "vol_redact1".to_string(),
+            "redact-volume".to_string(),
+            "supersecret-token".to_string(),
+            "https://api.e2b.app".to_string(),
+            60_000,
+            Some("http://user:pass@proxy.example.com".to_string()),
+        );
+        let debug_str = format!("{vol:?}");
+        assert!(
+            !debug_str.contains("supersecret-token"),
+            "token must not appear in Debug output: {debug_str}"
+        );
+        assert!(
+            !debug_str.contains("user:pass"),
+            "proxy credentials must not appear in Debug output: {debug_str}"
+        );
+        assert!(
+            debug_str.contains("<redacted>"),
+            "Debug output must contain '<redacted>': {debug_str}"
+        );
+        assert!(
+            debug_str.contains("vol_redact1"),
+            "volume_id must appear in Debug output: {debug_str}"
+        );
+        assert!(
+            debug_str.contains("redact-volume"),
+            "name must appear in Debug output: {debug_str}"
+        );
+    }
+
+    #[test]
+    fn volume_opts_debug_redacts_api_key_and_proxy() {
+        let opts = VolumeOpts {
+            api_key: Some("e2b_secret".to_string()),
+            domain: Some("e2b.app".to_string()),
+            api_url: Some("https://api.e2b.app".to_string()),
+            request_timeout_ms: Some(30_000),
+            proxy: Some("http://user:pass@proxy.example.com".to_string()),
+        };
+        let debug_str = format!("{opts:?}");
+        assert!(
+            !debug_str.contains("e2b_secret"),
+            "api_key must not appear in Debug output: {debug_str}"
+        );
+        assert!(
+            !debug_str.contains("user:pass"),
+            "proxy credentials must not appear in Debug output: {debug_str}"
+        );
+        assert!(
+            debug_str.contains("<redacted>"),
+            "Debug output must contain '<redacted>': {debug_str}"
+        );
+        assert!(
+            debug_str.contains("e2b.app"),
+            "domain must appear in Debug output: {debug_str}"
+        );
+    }
+
+    // ── 404-message parity tests ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_info_404_includes_volume_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/volumes/vol_missing"))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_json(
+                    serde_json::json!({"code": "not_found", "message": "not found"}),
+                ),
+            )
+            .mount(&server)
+            .await;
+
+        let err = Volume::get_info("vol_missing", opts_for(&server))
+            .await
+            .expect_err("get_info on 404 must Err");
+        assert!(
+            matches!(&err, Error::NotFound(msg) if msg.contains("vol_missing")),
+            "expected NotFound with volume_id in message, got: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_404_includes_volume_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/volumes/vol_gone"))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_json(
+                    serde_json::json!({"code": "not_found", "message": "not found"}),
+                ),
+            )
+            .mount(&server)
+            .await;
+
+        let err = Volume::connect("vol_gone", opts_for(&server))
+            .await
+            .expect_err("connect on 404 must Err");
+        assert!(
+            matches!(&err, Error::NotFound(msg) if msg.contains("vol_gone")),
+            "expected NotFound with volume_id in message, got: {err:?}",
+        );
     }
 
     #[tokio::test]
