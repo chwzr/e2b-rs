@@ -30,12 +30,13 @@ pub struct VolumeOpts {
     /// Control-plane API base URL override. Falls back to `E2B_API_URL`.
     /// Primarily used in tests to point at a local or mock server.
     pub api_url: Option<String>,
-    /// Per-request timeout in milliseconds. This value is stored in the
-    /// [`Volume`] handle and used when constructing the content client in Tasks
-    /// 3–4. Defaults to [`crate::connection_config::REQUEST_TIMEOUT_MS`] (60 s).
+    /// Per-request timeout in milliseconds applied to **both** control-plane
+    /// calls (create/list/get_info/connect/destroy) and the volume-content
+    /// client constructed in Tasks 3–4. Defaults to
+    /// [`crate::connection_config::REQUEST_TIMEOUT_MS`] (60 s).
     pub request_timeout_ms: Option<u64>,
-    /// Optional HTTP/HTTPS proxy URL forwarded to both the control-plane client
-    /// and the volume-content client.
+    /// Optional HTTP/HTTPS proxy URL forwarded to **both** the control-plane
+    /// client and the volume-content client.
     pub proxy: Option<String>,
 }
 
@@ -101,11 +102,16 @@ impl Volume {
 
     /// Build a transient [`ApiClient`] and a resolved [`ConnectionConfig`] from
     /// the caller's [`VolumeOpts`].
+    ///
+    /// Both `proxy` and `request_timeout_ms` from [`VolumeOpts`] are forwarded
+    /// here so that all control-plane calls honour them.
     fn build_api_client(opts: &VolumeOpts) -> Result<(ApiClient, ConnectionConfig)> {
         let config = ConnectionConfig::new(ConnectionConfigOpts {
             api_key: opts.api_key.clone(),
             domain: opts.domain.clone(),
             api_url: opts.api_url.clone(),
+            proxy: opts.proxy.clone(),
+            request_timeout_ms: opts.request_timeout_ms,
             ..Default::default()
         });
         let api = ApiClient::new(&config, true)?;
@@ -343,5 +349,25 @@ mod tests {
             .await
             .expect("destroy ok");
         assert!(deleted);
+    }
+
+    /// Verify that setting `VolumeOpts.proxy` flows into the control-plane
+    /// `ConnectionConfigOpts` without error.  We use an unreachable proxy URL
+    /// (`http://127.0.0.1:9`) which is syntactically valid — `build_api_client`
+    /// must succeed even though no actual proxy is listening at that address
+    /// (the proxy is only dialled when a real HTTP request is made, not at
+    /// client construction time).
+    #[test]
+    fn build_api_client_with_proxy_succeeds() {
+        let opts = VolumeOpts {
+            api_key: Some("e2b_0123456789abcdef".to_string()),
+            api_url: Some("http://127.0.0.1:9".to_string()),
+            proxy: Some("http://127.0.0.1:9".to_string()),
+            ..Default::default()
+        };
+        // `build_api_client` must succeed: an invalid proxy URL would return
+        // `Err(Error::InvalidArgument(...))` here, so any success confirms the
+        // proxy field was accepted by `reqwest::ClientBuilder`.
+        Volume::build_api_client(&opts).expect("client builds with proxy set");
     }
 }

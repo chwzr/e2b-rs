@@ -9,7 +9,7 @@ pub(crate) mod client;
 
 pub mod types;
 
-pub mod control;
+pub(crate) mod control;
 
 pub use types::{
     VolumeAndToken, VolumeEntryStat, VolumeFileType, VolumeInfo, VolumeListOpts, VolumeMakeDirOpts,
