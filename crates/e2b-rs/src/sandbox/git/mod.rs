@@ -17,8 +17,8 @@ use crate::errors::{Error, Result};
 use crate::sandbox::commands::{CommandResult, CommandStartOpts, Commands};
 use crate::sandbox::git::util::{
     build_auth_error_message, build_git_command, build_push_args, build_upstream_error_message,
-    derive_repo_dir_from_url, is_auth_failure, is_missing_upstream, strip_credentials,
-    with_credentials,
+    derive_repo_dir_from_url, is_auth_failure, is_missing_upstream, parse_git_branches,
+    parse_git_status, strip_credentials, with_credentials,
 };
 
 // ---------------------------------------------------------------------------
@@ -299,6 +299,24 @@ pub struct GitPullOpts {
     /// Password / token for HTTP(S) authentication. Requires
     /// [`GitPullOpts::username`].
     pub password: Option<String>,
+    /// Run as this sandbox user.
+    pub user: Option<String>,
+}
+
+/// Options for [`Git::dangerously_authenticate`].
+///
+/// Credentials are written to the global git credential store — they persist
+/// until explicitly removed. Prefer short-lived tokens when possible.
+#[derive(Default)]
+pub struct GitDangerouslyAuthenticateOpts {
+    /// Git username (e.g. a GitHub account name). **Required.**
+    pub username: String,
+    /// Git password or personal-access token. **Required.**
+    pub password: String,
+    /// Git host to authenticate against. Defaults to `"github.com"`.
+    pub host: Option<String>,
+    /// Git protocol (e.g. `"https"`). Defaults to `"https"`.
+    pub protocol: Option<String>,
     /// Run as this sandbox user.
     pub user: Option<String>,
 }
@@ -1042,6 +1060,98 @@ impl Git {
             Some(trimmed)
         })
     }
+
+    /// Get repository status information.
+    ///
+    /// Runs `git -C <path> status --porcelain=1 -b` and parses the stdout into
+    /// a [`GitStatus`].
+    ///
+    /// A non-zero git exit is NOT treated as an error — stdout is always parsed,
+    /// mirroring the JS SDK which calls `parseGitStatus(result.stdout)` unconditionally.
+    pub async fn status(&self, path: &str, user: Option<&str>) -> Result<GitStatus> {
+        let cmd = build_git_command(&["status", "--porcelain=1", "-b"], Some(path));
+        let result = self.run_cmd(&cmd, user.map(str::to_string)).await?;
+        Ok(parse_git_status(&result.stdout))
+    }
+
+    /// List branches in a repository.
+    ///
+    /// Runs `git -C <path> branch --format=%(refname:short)\t%(HEAD)` (the `\t`
+    /// is a real tab character used as the field separator) and parses the
+    /// stdout into a [`GitBranches`].
+    ///
+    /// A non-zero git exit is NOT treated as an error — stdout is always parsed,
+    /// mirroring the JS SDK which calls `parseGitBranches(result.stdout)` unconditionally.
+    pub async fn branches(&self, path: &str, user: Option<&str>) -> Result<GitBranches> {
+        // The \t is a real tab character — git's --format uses it as the field
+        // separator and parse_git_branches splits on '\t'.
+        let cmd = build_git_command(
+            &["branch", "--format=%(refname:short)\t%(HEAD)"],
+            Some(path),
+        );
+        let result = self.run_cmd(&cmd, user.map(str::to_string)).await?;
+        Ok(parse_git_branches(&result.stdout))
+    }
+
+    /// Authenticate git globally via the credential helper store.
+    ///
+    /// Configures `credential.helper = store` then injects credentials via
+    /// `git credential approve`.  Credentials **persist** in the sandbox until
+    /// explicitly removed — prefer short-lived tokens when possible.
+    ///
+    /// Returns [`Error::InvalidArgument`] when [`GitDangerouslyAuthenticateOpts::username`]
+    /// or [`GitDangerouslyAuthenticateOpts::password`] is empty.
+    ///
+    /// Port of `dangerouslyAuthenticate` from `git/index.ts` (line 855).
+    pub async fn dangerously_authenticate(
+        &self,
+        opts: GitDangerouslyAuthenticateOpts,
+    ) -> Result<CommandResult> {
+        let GitDangerouslyAuthenticateOpts {
+            username,
+            password,
+            host,
+            protocol,
+            user,
+        } = opts;
+
+        if username.is_empty() || password.is_empty() {
+            return Err(Error::InvalidArgument(
+                "Both username and password are required to authenticate git.".to_string(),
+            ));
+        }
+
+        let target_host = host.as_deref().unwrap_or("github.com").trim().to_string();
+        let target_protocol = protocol.as_deref().unwrap_or("https").trim().to_string();
+
+        // Six elements joined by "\n".  The two trailing empty strings make the
+        // input end with "\n\n" — a blank line, which is how git terminates
+        // credential input blocks.
+        let credential_input = [
+            format!("protocol={target_protocol}"),
+            format!("host={target_host}"),
+            format!("username={username}"),
+            format!("password={password}"),
+            String::new(),
+            String::new(),
+        ]
+        .join("\n");
+
+        // Step 1: configure credential.helper to "store" (no -C; global config).
+        let config_cmd =
+            build_git_command(&["config", "--global", "credential.helper", "store"], None);
+        self.run_cmd(&config_cmd, user.clone()).await?;
+
+        // Step 2: pipe the credential block into `git credential approve`.
+        // This is a raw shell pipeline (JS: runShell), not a single git command.
+        let approve_git_cmd = build_git_command(&["credential", "approve"], None);
+        let approve_cmd = format!(
+            "printf %s {} | {}",
+            crate::utils::shell_quote(&credential_input),
+            approve_git_cmd
+        );
+        self.run_cmd(&approve_cmd, user).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,6 +1163,7 @@ mod tests {
     use super::*;
     use crate::connect::client::{ConnectClient, ConnectClientOpts};
     use crate::connect::envelope::{FLAG_END_STREAM, encode_envelope};
+    use base64::prelude::{BASE64_STANDARD, Engine as _};
     use std::sync::Arc;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1483,5 +1594,152 @@ mod tests {
             build_git_command(&["config", "--global", "user.email", "alice@x.com"], None);
         assert_eq!(name_cmd, "git config --global user.name Alice");
         assert_eq!(email_cmd, "git config --global user.email alice@x.com");
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 4: status / branches / dangerously_authenticate helpers + tests
+    // -----------------------------------------------------------------------
+
+    /// Build a streaming process body: Start → Data(stdout) → End(exit_code) → EndStream.
+    fn proc_stream_with_stdout(exit_code: i32, stdout_b64: &str) -> Vec<u8> {
+        let mut body = encode_envelope(0, br#"{"event":{"start":{"pid":7}}}"#);
+        body.extend(encode_envelope(
+            0,
+            format!(r#"{{"event":{{"data":{{"stdout":"{stdout_b64}"}}}}}}"#).as_bytes(),
+        ));
+        body.extend(encode_envelope(
+            0,
+            format!(
+                r#"{{"event":{{"end":{{"exitCode":{exit_code},"exited":true,"status":"exited"}}}}}}"#
+            )
+            .as_bytes(),
+        ));
+        body.extend(encode_envelope(FLAG_END_STREAM, b"{}"));
+        body
+    }
+
+    /// Mount a process mock that streams stdout then exits.
+    async fn mount_proc_with_stdout(server: &MockServer, exit_code: i32, stdout_b64: &str) {
+        Mock::given(method("POST"))
+            .and(path("/process.Process/Start"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/connect+json")
+                    .set_body_bytes(proc_stream_with_stdout(exit_code, stdout_b64)),
+            )
+            .mount(server)
+            .await;
+    }
+
+    /// `git.status` parses the stdout produced by `git status --porcelain=1 -b`.
+    ///
+    /// Input: `"## main...origin/main [ahead 1]\n M a.rs\n"`
+    /// Expected: current_branch = "main", upstream = "origin/main", ahead = 1,
+    /// file_status.len() = 1.
+    #[tokio::test]
+    async fn status_parses_stdout_into_git_status() {
+        let server = MockServer::start().await;
+        let raw = "## main...origin/main [ahead 1]\n M a.rs\n";
+        let b64 = BASE64_STANDARD.encode(raw.as_bytes());
+        mount_proc_with_stdout(&server, 0, &b64).await;
+
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+        let status = git.status("/repo", None).await.expect("status ok");
+
+        assert_eq!(status.current_branch.as_deref(), Some("main"));
+        assert_eq!(status.upstream.as_deref(), Some("origin/main"));
+        assert_eq!(status.ahead, 1);
+        assert_eq!(status.file_status.len(), 1);
+    }
+
+    /// `git.branches` parses the stdout produced by `git branch --format=...`.
+    ///
+    /// Input: `"main\t*\nfeature\t\n"`
+    /// Expected: current_branch = "main", branches = ["main", "feature"].
+    #[tokio::test]
+    async fn branches_parses_stdout_into_git_branches() {
+        let server = MockServer::start().await;
+        // "main\t*\nfeature\t\n" — tab separates name from HEAD marker
+        let raw = "main\t*\nfeature\t\n";
+        let b64 = BASE64_STANDARD.encode(raw.as_bytes());
+        mount_proc_with_stdout(&server, 0, &b64).await;
+
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+        let result = git.branches("/repo", None).await.expect("branches ok");
+
+        assert_eq!(result.current_branch.as_deref(), Some("main"));
+        assert_eq!(
+            result.branches,
+            vec!["main".to_string(), "feature".to_string()]
+        );
+    }
+
+    /// Empty `username` must return `Err(InvalidArgument)` before any network I/O.
+    #[tokio::test]
+    async fn dangerously_authenticate_empty_username_is_invalid_argument() {
+        let server = MockServer::start().await;
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+        let err = git
+            .dangerously_authenticate(GitDangerouslyAuthenticateOpts {
+                username: String::new(),
+                password: "token".to_string(),
+                ..Default::default()
+            })
+            .await
+            .expect_err("empty username must fail");
+        assert!(
+            matches!(err, crate::errors::Error::InvalidArgument(_)),
+            "expected InvalidArgument, got {err:?}"
+        );
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "guard must fire before any network round-trip"
+        );
+    }
+
+    /// Empty `password` must return `Err(InvalidArgument)` before any network I/O.
+    #[tokio::test]
+    async fn dangerously_authenticate_empty_password_is_invalid_argument() {
+        let server = MockServer::start().await;
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+        let err = git
+            .dangerously_authenticate(GitDangerouslyAuthenticateOpts {
+                username: "alice".to_string(),
+                password: String::new(),
+                ..Default::default()
+            })
+            .await
+            .expect_err("empty password must fail");
+        assert!(
+            matches!(err, crate::errors::Error::InvalidArgument(_)),
+            "expected InvalidArgument, got {err:?}"
+        );
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "guard must fire before any network round-trip"
+        );
+    }
+
+    /// Happy-path `dangerously_authenticate`: both config and approve commands
+    /// succeed (exit 0).  The mock responds to both `/process.Process/Start`
+    /// calls.
+    #[tokio::test]
+    async fn dangerously_authenticate_happy_path_returns_ok() {
+        let server = MockServer::start().await;
+        // One mount handles both process calls (config + approve).
+        mount_proc(&server, 0).await;
+
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+        let result = git
+            .dangerously_authenticate(GitDangerouslyAuthenticateOpts {
+                username: "alice".to_string(),
+                password: "s3cr3t".to_string(),
+                host: Some("github.com".to_string()),
+                protocol: Some("https".to_string()),
+                user: None,
+            })
+            .await
+            .expect("dangerously_authenticate ok");
+        assert_eq!(result.exit_code, 0);
     }
 }

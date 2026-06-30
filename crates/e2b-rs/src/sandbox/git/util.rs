@@ -1,8 +1,4 @@
 //! Pure git command-building, credential, and output-parsing helpers.
-//!
-//! All public items are consumed in later tasks (Task 2+); the `dead_code`
-//! lint is suppressed here to avoid spurious warnings until then.
-#![allow(dead_code)]
 
 use super::types::{GitBranches, GitFileStatus, GitStatus, GitStatusLabel};
 use crate::errors::{Error, Result};

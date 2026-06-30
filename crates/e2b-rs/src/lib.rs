@@ -118,13 +118,14 @@ pub use sandbox::signature::{Signature, SignatureOperation, get_signature, get_s
 pub use sandbox::{
     CommandHandle, CommandOutput, CommandResult, CommandStartOpts, Commands, EntryInfo, FileType,
     Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts, Git, GitAddOpts, GitBranches,
-    GitCloneOpts, GitCommitOpts, GitConfigOpts, GitConfigScope, GitDeleteBranchOpts, GitFileStatus,
-    GitInitOpts, GitPullOpts, GitPushOpts, GitRemoteAddOpts, GitRequestOpts, GitResetMode,
-    GitResetOpts, GitRestoreOpts, GitStatus, GitStatusLabel, NetworkRule, ProcessInfo, Pty,
-    PtyCreateOpts, PtySize, Sandbox, SandboxConnectBuilder, SandboxConnectOpts,
-    SandboxCreateBuilder, SandboxCreateOpts, SandboxInfo, SandboxListOpts, SandboxMetrics,
-    SandboxNetworkUpdate, SandboxPaginator, SandboxState, SandboxUrlOpts, SnapshotInfo,
-    SnapshotListOpts, SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry, WriteInfo,
+    GitCloneOpts, GitCommitOpts, GitConfigOpts, GitConfigScope, GitDangerouslyAuthenticateOpts,
+    GitDeleteBranchOpts, GitFileStatus, GitInitOpts, GitPullOpts, GitPushOpts, GitRemoteAddOpts,
+    GitRequestOpts, GitResetMode, GitResetOpts, GitRestoreOpts, GitStatus, GitStatusLabel,
+    NetworkRule, ProcessInfo, Pty, PtyCreateOpts, PtySize, Sandbox, SandboxConnectBuilder,
+    SandboxConnectOpts, SandboxCreateBuilder, SandboxCreateOpts, SandboxInfo, SandboxListOpts,
+    SandboxMetrics, SandboxNetworkUpdate, SandboxPaginator, SandboxState, SandboxUrlOpts,
+    SnapshotInfo, SnapshotListOpts, SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry,
+    WriteInfo,
 };
 
 pub mod paginator;
