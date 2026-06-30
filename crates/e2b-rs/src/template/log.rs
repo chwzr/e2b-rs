@@ -115,7 +115,11 @@ impl std::fmt::Display for LogEntry {
         write!(
             f,
             "[{}] [{}] {}",
-            self.timestamp.to_rfc3339(),
+            // Match the JS SDK's `Date.toISOString()` exactly: 3 fractional-second
+            // digits and a `Z` suffix (e.g. `2024-01-01T00:00:00.000Z`), not the
+            // default RFC3339 `+00:00` offset without milliseconds.
+            self.timestamp
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             self.level,
             self.message
         )
@@ -209,6 +213,9 @@ mod tests {
             formatted.contains("[warn] boom"),
             "expected '[warn] boom' in: {formatted}"
         );
+        // The timestamp must match JS `Date.toISOString()` exactly: millisecond
+        // precision + `Z` suffix.
+        assert_eq!(formatted, "[2024-01-01T00:00:00.000Z] [warn] boom");
     }
 
     #[test]
