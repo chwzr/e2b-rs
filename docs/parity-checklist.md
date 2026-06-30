@@ -54,6 +54,21 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 
 > Deferred parity detail: the JS transport sets a `Keepalive-Ping-Interval` header on streaming requests (`KEEPALIVE_PING_HEADER`/`KEEPALIVE_PING_INTERVAL_SEC`, already defined in `connection_config`). The stream decoder works without it (it's a server-side connection-liveness hint); add it to `server_stream`'s request headers in Plan 3 once confirmed against `sandbox/index.ts`.
 
-## Sandbox & I/O (Plan 3) · Git & Volume (Plan 4) · Template (Plan 5)
+## Sandbox lifecycle (Plan 3a)
+
+| JS (`src/sandbox/...`) | Rust (`e2b_rs::...`) | Status |
+|---|---|---|
+| `Sandbox.create` | `Sandbox::create()` (IntoFuture builder) | ✅ |
+| `Sandbox.connect` | `Sandbox::connect(id)` (IntoFuture builder) | ✅ |
+| `sandbox.kill` / `SandboxApi.kill` | `Sandbox::kill` | ✅ |
+| `sandbox.getInfo` | `Sandbox::get_info` → `SandboxInfo` | ✅ |
+| `sandbox.setTimeout` | `Sandbox::set_timeout` | ✅ |
+| `sandbox.getHost` | `Sandbox::get_host` | ✅ |
+| `sandbox.isRunning` | `Sandbox::is_running` (control-plane state; envd `/health` in 3b) | 🔶 |
+| `Sandbox.list` / `SandboxPaginator` | `Sandbox::list` + `SandboxPaginator` | ✅ |
+| `pause`/`betaPause`/resume/`getMetrics`/snapshots/`updateNetwork`/MCP/signed-URLs | _(Plan 3a-extras)_ | ⬜ |
+| `files`/`commands`/`pty` | _(Plans 3b/3c)_ | ⬜ |
+
+## Sandbox & I/O (Plan 3, remaining) · Git & Volume (Plan 4) · Template (Plan 5)
 
 _Rows added as each milestone lands._
