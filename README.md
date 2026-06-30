@@ -25,6 +25,18 @@ println!("{}", sandbox.get_host(3000));
 sandbox.kill().await?;
 ```
 
+Control-plane extras are also available: pause/resume, metrics, snapshots
+(create/list/delete), network-rule updates, and signed upload/download URLs.
+
+```rust
+use e2b_rs::Sandbox;
+
+let sandbox = Sandbox::create().template("base").await?;
+let metrics = sandbox.get_metrics().await?;
+let snap = sandbox.create_snapshot(Some("nightly".to_string())).await?;
+sandbox.pause().await?;
+```
+
 The library is imported as `e2b_rs`:
 
 ```rust

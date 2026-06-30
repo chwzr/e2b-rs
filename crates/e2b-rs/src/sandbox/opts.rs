@@ -47,6 +47,27 @@ pub struct SandboxListOpts {
     pub connection: ConnectionConfigOpts,
 }
 
+/// Options for [`Sandbox::list_snapshots`](crate::Sandbox::list_snapshots).
+#[derive(Default)]
+pub struct SnapshotListOpts {
+    /// Only list snapshots created from this sandbox id.
+    pub sandbox_id: Option<String>,
+    /// Maximum number of snapshots per page.
+    pub limit: Option<u32>,
+    /// Connection configuration (API key, URL, domain, debug).
+    pub connection: ConnectionConfigOpts,
+}
+
+/// Options for building signed file URLs ([`crate::Sandbox::upload_url`] /
+/// [`crate::Sandbox::download_url`]).
+#[derive(Default)]
+pub struct SandboxUrlOpts {
+    /// The sandbox user the URL authorizes (defaults to `user` on older envd).
+    pub user: Option<String>,
+    /// If set, produce an expiring signature valid for this many seconds.
+    pub signature_expiration_secs: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

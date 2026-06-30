@@ -5,11 +5,13 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use crate::api::client::ApiClient;
-use crate::connection_config::ConnectionConfig;
-use crate::errors::Result;
+use crate::connection_config::{ConnectionConfig, DEFAULT_USERNAME, ENVD_PORT};
+use crate::envd::versions::version_gte;
+use crate::errors::{Error, Result};
 use crate::sandbox::api;
-use crate::sandbox::opts::{SandboxConnectOpts, SandboxCreateOpts};
-use crate::sandbox::types::{SandboxInfo, SandboxState};
+use crate::sandbox::opts::{SandboxConnectOpts, SandboxCreateOpts, SandboxUrlOpts};
+use crate::sandbox::signature::{SignatureOperation, get_signature_now};
+use crate::sandbox::types::{SandboxInfo, SandboxMetrics, SandboxState, SnapshotInfo};
 
 /// A boxed future returned by the lifecycle builders.
 type SandboxFuture = Pin<Box<dyn Future<Output = Result<Sandbox>> + Send>>;
@@ -33,11 +35,9 @@ pub struct Sandbox {
     pub(crate) sandbox_id: String,
     /// Optional per-sandbox domain override.
     pub(crate) sandbox_domain: Option<String>,
-    /// envd version string; read by envd I/O in Plan 3b.
-    #[allow(dead_code)] // read by envd I/O in Plan 3b
+    /// envd version string; used by version gates and envd I/O in Plan 3b.
     pub(crate) envd_version: String,
-    /// Access token for envd communication; read by envd I/O in Plan 3b.
-    #[allow(dead_code)] // read by envd I/O in Plan 3b
+    /// Access token for envd communication.
     pub(crate) envd_access_token: Option<String>,
     /// Resolved connection configuration.
     pub(crate) config: ConnectionConfig,
@@ -91,6 +91,13 @@ impl Sandbox {
         api::set_sandbox_timeout(&self.api, &self.sandbox_id, timeout).await
     }
 
+    /// Pause the sandbox, returning `false` if it was already paused.
+    ///
+    /// Takes a full memory snapshot so a later [`Sandbox::connect`] warm-boots.
+    pub async fn pause(&self) -> Result<bool> {
+        api::pause_sandbox(&self.api, &self.sandbox_id, true).await
+    }
+
     /// Whether the sandbox is currently running (control-plane state).
     ///
     /// Note: Plan 3b refines this to the envd `/health` probe; for now it
@@ -102,6 +109,47 @@ impl Sandbox {
         ))
     }
 
+    /// Fetch the sandbox's resource-usage metrics.
+    ///
+    /// # Errors
+    /// Returns [`Error::Template`] if the sandbox's envd is older than `0.1.5`
+    /// (metrics are unsupported), matching the JS SDK.
+    pub async fn get_metrics(&self) -> Result<Vec<SandboxMetrics>> {
+        if !version_gte(&self.envd_version, "0.1.5") {
+            return Err(Error::Template(
+                "Metrics require a newer template (envd >= 0.1.5); rebuild the template."
+                    .to_string(),
+            ));
+        }
+        let raw = api::get_sandbox_metrics(&self.api, &self.sandbox_id, None, None).await?;
+        Ok(raw.into_iter().map(SandboxMetrics::from_metric).collect())
+    }
+
+    /// Create a snapshot of this sandbox. `name` registers (or re-points) a
+    /// template alias for the snapshot.
+    pub async fn create_snapshot(&self, name: Option<String>) -> Result<SnapshotInfo> {
+        let raw = api::create_snapshot(&self.api, &self.sandbox_id, name.as_deref()).await?;
+        Ok(SnapshotInfo::from_schema(raw))
+    }
+
+    /// Delete a snapshot by id. Returns `false` if it was already gone.
+    pub async fn delete_snapshot(
+        snapshot_id: impl Into<String>,
+        connection: crate::connection_config::ConnectionConfigOpts,
+    ) -> Result<bool> {
+        let config = ConnectionConfig::new(connection);
+        let api = ApiClient::new(&config, true)?;
+        api::delete_snapshot(&api, &snapshot_id.into()).await
+    }
+
+    /// List snapshots (paginated). Filter by source sandbox via
+    /// [`crate::SnapshotListOpts::sandbox_id`].
+    pub fn list_snapshots(
+        opts: crate::sandbox::opts::SnapshotListOpts,
+    ) -> Result<crate::sandbox::snapshot_paginator::SnapshotPaginator> {
+        crate::sandbox::snapshot_paginator::SnapshotPaginator::new(opts)
+    }
+
     /// List sandboxes (paginated). Filter by state/metadata via [`crate::SandboxListOpts`].
     ///
     /// Note: defaults to listing only `Running` and `Paused` sandboxes (the JS
@@ -110,6 +158,101 @@ impl Sandbox {
         opts: crate::sandbox::opts::SandboxListOpts,
     ) -> Result<crate::sandbox::paginator::SandboxPaginator> {
         crate::sandbox::paginator::SandboxPaginator::new(opts)
+    }
+
+    /// Atomically replace the sandbox's egress network policy.
+    ///
+    /// Note: this REPLACES the policy — fields left empty clear the
+    /// corresponding server-side rules (no merge). A `409` here means the
+    /// sandbox is paused (resume it first).
+    pub async fn update_network(
+        &self,
+        update: crate::sandbox::network::SandboxNetworkUpdate,
+    ) -> Result<()> {
+        api::update_sandbox_network(&self.api, &self.sandbox_id, &update.to_wire_body()).await
+    }
+
+    /// Resolve the per-sandbox domain (override, else config default).
+    fn resolved_domain(&self) -> &str {
+        self.sandbox_domain
+            .as_deref()
+            .unwrap_or(&self.config.domain)
+    }
+
+    /// Build the base `/files` URL (`{envd_direct_url}/files?username&path`),
+    /// percent-encoding the query values via `reqwest::Url`.
+    fn file_url(&self, path: &str, user: Option<&str>) -> Result<reqwest::Url> {
+        let base =
+            self.config
+                .get_sandbox_direct_url(&self.sandbox_id, self.resolved_domain(), ENVD_PORT);
+        let mut url = reqwest::Url::parse(&format!("{base}/files"))
+            .map_err(|e| Error::Internal(format!("invalid sandbox url: {e}")))?;
+        {
+            let mut q = url.query_pairs_mut();
+            if let Some(user) = user {
+                q.append_pair("username", user);
+            }
+            if !path.is_empty() {
+                q.append_pair("path", path);
+            }
+        }
+        Ok(url)
+    }
+
+    /// Build a signed (or unsigned) URL for `op` on `path`.
+    fn signed_file_url(
+        &self,
+        path: &str,
+        op: SignatureOperation,
+        opts: &SandboxUrlOpts,
+    ) -> Result<String> {
+        let use_signature = self
+            .envd_access_token
+            .as_deref()
+            .is_some_and(|t| !t.is_empty());
+        if !use_signature && opts.signature_expiration_secs.is_some() {
+            return Err(Error::InvalidArgument(
+                "Signature expiration can be used only when the sandbox is created as secured."
+                    .to_string(),
+            ));
+        }
+
+        // Older envd (<0.4.0) has no per-request user; default to the legacy user.
+        let user = match opts.user.as_deref() {
+            Some(u) => Some(u.to_string()),
+            None if !version_gte(&self.envd_version, "0.4.0") => Some(DEFAULT_USERNAME.to_string()),
+            None => None,
+        };
+
+        let mut url = self.file_url(path, user.as_deref())?;
+        if use_signature {
+            let sig = get_signature_now(
+                path,
+                op,
+                user.as_deref(),
+                opts.signature_expiration_secs,
+                self.envd_access_token.as_deref(),
+            )?;
+            url.query_pairs_mut()
+                .append_pair("signature", &sig.signature);
+            if let Some(exp) = sig.expiration {
+                url.query_pairs_mut()
+                    .append_pair("signature_expiration", &exp.to_string());
+            }
+        }
+        Ok(url.to_string())
+    }
+
+    /// Build a URL for uploading a file to the sandbox (empty `path` = the
+    /// default upload directory). Signed when the sandbox is secured.
+    pub fn upload_url(&self, path: Option<&str>, opts: SandboxUrlOpts) -> Result<String> {
+        self.signed_file_url(path.unwrap_or(""), SignatureOperation::Write, &opts)
+    }
+
+    /// Build a URL for downloading `path` from the sandbox. Signed when the
+    /// sandbox is secured.
+    pub fn download_url(&self, path: &str, opts: SandboxUrlOpts) -> Result<String> {
+        self.signed_file_url(path, SignatureOperation::Read, &opts)
     }
 
     /// Build a `Sandbox` from a `create`/`connect` response (the lean
@@ -278,6 +421,62 @@ mod tests {
     use std::time::Duration;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn local_sandbox(token: Option<&str>) -> Sandbox {
+        let config = crate::connection_config::ConnectionConfig::new(
+            crate::connection_config::ConnectionConfigOpts {
+                api_key: Some("e2b_0123456789abcdef".to_string()),
+                domain: Some("e2b.app".to_string()),
+                ..Default::default()
+            },
+        );
+        let api = ApiClient::new(&config, true).expect("api");
+        Sandbox {
+            sandbox_id: "sbx_u".to_string(),
+            sandbox_domain: Some("e2b.app".to_string()),
+            envd_version: "0.6.0".to_string(),
+            envd_access_token: token.map(str::to_string),
+            config,
+            api,
+        }
+    }
+
+    #[test]
+    fn download_url_without_token_is_unsigned() {
+        let sandbox = local_sandbox(None);
+        let url = sandbox
+            .download_url("/home/user/f.txt", Default::default())
+            .expect("url");
+        assert!(url.contains("/files"));
+        assert!(
+            url.contains("path=%2Fhome%2Fuser%2Ff.txt") || url.contains("path=/home/user/f.txt")
+        );
+        assert!(!url.contains("signature="));
+    }
+
+    #[test]
+    fn download_url_with_token_is_signed() {
+        let sandbox = local_sandbox(Some("tok_abc"));
+        let url = sandbox
+            .download_url("/f.txt", Default::default())
+            .expect("url");
+        assert!(url.contains("signature=v1_"));
+    }
+
+    #[test]
+    fn expiration_without_token_is_an_error() {
+        let sandbox = local_sandbox(None);
+        let err = sandbox
+            .upload_url(
+                Some("/f.txt"),
+                crate::sandbox::opts::SandboxUrlOpts {
+                    signature_expiration_secs: Some(60),
+                    ..Default::default()
+                },
+            )
+            .expect_err("must reject expiration without token");
+        assert!(matches!(err, Error::InvalidArgument(_)));
+    }
 
     /// The rich `SandboxDetail` returned by `GET /sandboxes/{id}`.
     fn detail_json(id: &str, state: &str) -> serde_json::Value {
