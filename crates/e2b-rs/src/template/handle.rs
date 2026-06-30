@@ -107,8 +107,9 @@ pub(crate) async fn wait_for_build_finish(
     }
 
     // Unreachable in normal flow — the loop always returns through the
-    // Ready/Error match arm. Included as a safe fallback.
-    Ok(())
+    // Ready/Error match arm.  Mirrors the JS SDK's post-loop
+    // `throw new BuildError('Unknown build error occurred.')`.
+    Err(Error::Build("Unknown build error occurred.".to_string()))
 }
 
 // ── BuildHandle ──────────────────────────────────────────────────────────────

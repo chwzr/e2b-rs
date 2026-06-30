@@ -18,8 +18,8 @@
 //!
 //! # Serialisation
 //!
-//! The `Template::serialize` and `Template::instruction_steps` methods are
-//! `pub(crate)` and are called by the HTTP-build layer (Tasks 2–4) to produce
+//! `Template::serialize` and `Template::instruction_steps_from` are
+//! `pub(crate)` helpers called by the HTTP-build layer (Tasks 2–4) to produce
 //! the wire-format body for the build API.
 
 use crate::errors::Result;
@@ -202,10 +202,10 @@ impl std::fmt::Debug for BuildOptions {
 ///
 /// # Serialisation
 ///
-/// Call `Template::instruction_steps` to convert accumulated instructions to
-/// the wire type, then pass the result to `Template::serialize` to build the
-/// full `TemplateBuildStartV2` request body. These methods are `pub(crate)`
-/// and are called internally by the HTTP build layer.
+/// The `pub(crate)` helper `instruction_steps_from` converts accumulated
+/// instructions to the wire type; `serialize` builds the full
+/// `TemplateBuildStartV2` request body.  Both are called internally by the
+/// HTTP build layer.
 #[derive(Clone, Default)]
 pub struct Template {
     /// Base Docker image (e.g. `"node:20"`). Set by [`Template::from_image`].
@@ -355,41 +355,10 @@ impl Template {
 
     // ── Internal serialisation helpers ────────────────────────────────────────
 
-    /// Map each accumulated [`Instruction`] to a generated
-    /// [`crate::api::schema::TemplateStep`] wire type.
-    ///
-    /// The mapping is:
-    ///
-    /// | [`InstructionType`] | `TemplateStep.type_` |
-    /// |---|---|
-    /// | [`InstructionType::Copy`] | `"COPY"` |
-    /// | [`InstructionType::Env`] | `"ENV"` |
-    /// | [`InstructionType::Run`] | `"RUN"` |
-    /// | [`InstructionType::Workdir`] | `"WORKDIR"` |
-    /// | [`InstructionType::User`] | `"USER"` |
-    ///
-    /// Called by tests and by the HTTP build layer before passing the result to
-    /// [`Template::serialize`].
-    // Used in tests; `instruction_steps_from` is the production path.
-    #[allow(dead_code)]
-    pub(crate) fn instruction_steps(&self) -> Vec<crate::api::schema::TemplateStep> {
-        self.instructions
-            .iter()
-            .map(|instr| crate::api::schema::TemplateStep {
-                type_: instruction_type_str(instr.instruction_type),
-                args: instr.args.clone(),
-                files_hash: instr.files_hash.clone(),
-                force: instr.force,
-            })
-            .collect()
-    }
-
     /// Map a slice of [`Instruction`]s (typically hash-enriched) to
     /// [`crate::api::schema::TemplateStep`] wire types.
     ///
-    /// This is like [`Template::instruction_steps`] but operates on an
-    /// arbitrary instruction slice rather than `self.instructions`. The build
-    /// layer calls this with the hash-filled instructions returned by
+    /// The build layer calls this with the hash-filled instructions returned by
     /// [`crate::template::build_api::instructions_with_hashes`].
     pub(crate) fn instruction_steps_from(
         instructions: &[Instruction],
@@ -449,75 +418,19 @@ impl Template {
         name: &str,
         opts: BuildOptions,
     ) -> crate::errors::Result<crate::template::handle::BuildHandle> {
-        use std::sync::Arc;
-
-        use crate::api::client::ApiClient;
-        use crate::connection_config::{ConnectionConfig, ConnectionConfigOpts};
-        use crate::template::build_api::{
-            instructions_with_hashes, request_build, trigger_build, upload_build_context,
-        };
         use crate::template::handle::{BuildHandle, wait_for_build_finish};
         use tokio::sync::{mpsc, oneshot};
 
-        // 1. Resolve ConnectionConfig + ApiClient.
-        let config = ConnectionConfig::new(ConnectionConfigOpts {
-            api_key: opts.api_key.clone(),
-            domain: opts.domain.clone(),
-            api_url: opts.api_url.clone(),
-            request_timeout_ms: opts.request_timeout_ms,
-            ..Default::default()
-        });
-        let api = Arc::new(ApiClient::new(&config, true)?);
+        let (api, info) = self.setup_build(name, &opts).await?;
 
-        // 2. Parse "name:tag" form.
-        let (template_name, extra_tag) = normalize_build_name(name);
-        let tags: Vec<String> = extra_tag.into_iter().collect();
-
-        // 3. Request a build slot from the control plane.
-        let resp = request_build(
-            &api,
-            &template_name,
-            &tags,
-            opts.cpu_count.or(self.cpu_count),
-            opts.memory_mb.or(self.memory_mb),
-        )
-        .await?;
-
-        // 4. Resolve build context directory (default: cwd).
-        let context = std::env::current_dir().map_err(|e| {
-            crate::errors::Error::Internal(format!("failed to get current directory: {e}"))
-        })?;
-
-        // 5. Populate `files_hash` on COPY instructions.
-        let instrs = instructions_with_hashes(&self.instructions, &context)?;
-
-        // 6. Upload file-context archives for instructions not already cached.
-        let http = reqwest::Client::new();
-        upload_build_context(&api, &http, &resp.template_id, &instrs, &context).await?;
-
-        // 7. Trigger the build with hash-filled steps; honour skip_cache override.
-        let steps = Template::instruction_steps_from(&instrs);
-        let mut body = self.serialize(steps);
-        body.force = opts.skip_cache || body.force;
-        trigger_build(&api, &resp.template_id, &resp.build_id, &body).await?;
-
-        // 8. Construct the BuildInfo returned to the caller.
-        let info = crate::template::types::BuildInfo {
-            template_id: resp.template_id.clone(),
-            build_id: resp.build_id.clone(),
-            name: Some(template_name.clone()),
-            alias: None,
-            tags: tags.clone(),
-        };
-
-        // 9. Spawn poll task; wire channels; return handle.
+        // Spawn poll task; wire channels; return handle.
         let (tx_logs, rx_logs) = mpsc::channel::<crate::template::log::LogEntry>(128);
         let (tx_result, rx_result) =
             oneshot::channel::<crate::errors::Result<crate::template::types::BuildInfo>>();
         let info_clone = info.clone();
-        let api_arc = Arc::clone(&api);
-        let tid = resp.template_id.clone();
-        let bid = resp.build_id.clone();
+        let api_arc = std::sync::Arc::clone(&api);
+        let tid = info.template_id.clone();
+        let bid = info.build_id.clone();
         let task = tokio::spawn(async move {
             let r = wait_for_build_finish(api_arc, tid, bid, 200, tx_logs)
                 .await
@@ -550,6 +463,36 @@ impl Template {
         name: &str,
         opts: BuildOptions,
     ) -> crate::errors::Result<crate::template::types::BuildInfo> {
+        let (_api, info) = self.setup_build(name, &opts).await?;
+        Ok(info)
+    }
+
+    /// Shared setup for [`Template::build`] and [`Template::build_in_background`].
+    ///
+    /// Performs steps 1–8 of the build pipeline:
+    /// 1. Resolve [`crate::ConnectionConfig`] and construct a shared
+    ///    [`crate::api::client::ApiClient`] (wrapped in an [`std::sync::Arc`]).
+    /// 2. Apply cpu/memory defaults (`2` vCPUs / `1024` MiB).
+    /// 3. Request a build slot via `POST /v3/templates`, passing the whole
+    ///    `name` unchanged (no colon splitting).
+    /// 4. Resolve the build context directory (`std::env::current_dir()`).
+    /// 5. Populate `files_hash` on `COPY` instructions.
+    /// 6. Upload file-context archives for uncached instructions.
+    /// 7. Trigger the build (`POST /v2/templates/{id}/builds/{bid}`).
+    /// 8. Construct [`crate::template::types::BuildInfo`] with
+    ///    `name = alias = name` (whole input) and `tags` from the API response.
+    ///
+    /// Returns `(api_client, build_info)`.  The caller either spawns a poll
+    /// task on top (`build`) or returns `build_info` immediately
+    /// (`build_in_background`).
+    async fn setup_build(
+        self,
+        name: &str,
+        opts: &BuildOptions,
+    ) -> crate::errors::Result<(
+        std::sync::Arc<crate::api::client::ApiClient>,
+        crate::template::types::BuildInfo,
+    )> {
         use std::sync::Arc;
 
         use crate::api::client::ApiClient;
@@ -568,19 +511,12 @@ impl Template {
         });
         let api = Arc::new(ApiClient::new(&config, true)?);
 
-        // 2. Parse "name:tag" form.
-        let (template_name, extra_tag) = normalize_build_name(name);
-        let tags: Vec<String> = extra_tag.into_iter().collect();
+        // 2. Apply cpu/memory defaults — mirrors JS `cpuCount ?? 2, memoryMB ?? 1024`.
+        let cpu = opts.cpu_count.or(self.cpu_count).unwrap_or(2);
+        let mem = opts.memory_mb.or(self.memory_mb).unwrap_or(1024);
 
-        // 3. Request a build slot from the control plane.
-        let resp = request_build(
-            &api,
-            &template_name,
-            &tags,
-            opts.cpu_count.or(self.cpu_count),
-            opts.memory_mb.or(self.memory_mb),
-        )
-        .await?;
+        // 3. Request a build slot — pass the WHOLE name; no colon splitting.
+        let resp = request_build(&api, name, &[], Some(cpu), Some(mem)).await?;
 
         // 4. Resolve build context directory (default: cwd).
         let context = std::env::current_dir().map_err(|e| {
@@ -600,14 +536,16 @@ impl Template {
         body.force = opts.skip_cache || body.force;
         trigger_build(&api, &resp.template_id, &resp.build_id, &body).await?;
 
-        // 8. Return BuildInfo immediately — no poll task is spawned.
-        Ok(crate::template::types::BuildInfo {
+        // 8. Construct BuildInfo — alias = name = whole input; tags from response.
+        let info = crate::template::types::BuildInfo {
             template_id: resp.template_id,
             build_id: resp.build_id,
-            name: Some(template_name),
-            alias: None,
-            tags,
-        })
+            name: Some(name.to_string()),
+            alias: Some(name.to_string()),
+            tags: resp.tags,
+        };
+
+        Ok((api, info))
     }
 }
 
@@ -693,19 +631,6 @@ fn apply_action(mut template: Template, action: DockerfileAction) -> Template {
         }
     }
     template
-}
-
-/// Split a `"name"` or `"name:tag"` string into `(name, Option<tag>)`.
-///
-/// If the name contains a colon, everything before the first colon is the
-/// base name and everything after is treated as a tag for the build request.
-/// Names without a colon return `(name, None)`.
-fn normalize_build_name(raw: &str) -> (String, Option<String>) {
-    match raw.split_once(':') {
-        // Strip the colon from the name; an empty tag (e.g. `"name:"`) yields no tag.
-        Some((n, t)) => (n.to_string(), (!t.is_empty()).then(|| t.to_string())),
-        None => (raw.to_string(), None),
-    }
 }
 
 /// Convert an [`InstructionType`] to its wire-format string representation.
@@ -807,7 +732,7 @@ CMD npm start
             .set_start_cmd("npm start", wait_for_timeout(1_000))
             .skip_cache();
 
-        let steps = template.instruction_steps();
+        let steps = Template::instruction_steps_from(&template.instructions);
         let body = template.serialize(steps);
 
         assert_eq!(body.from_image.as_deref(), Some("node:20"));
@@ -967,7 +892,7 @@ CMD npm start
             .from_dockerfile("FROM scratch\nRUN echo hi\nCOPY . /app\n")
             .expect("valid Dockerfile");
 
-        let steps = template.instruction_steps();
+        let steps = Template::instruction_steps_from(&template.instructions);
         // Collect type_ strings
         let type_strings: Vec<&str> = steps.iter().map(|s| s.type_.as_str()).collect();
 
@@ -1031,7 +956,7 @@ CMD npm start
             username: "u".to_string(),
             password: "p".to_string(),
         });
-        let steps = t.instruction_steps();
+        let steps = Template::instruction_steps_from(&t.instructions);
         let body = t.serialize(steps);
         assert!(body.from_image_registry.is_some());
     }
@@ -1058,23 +983,6 @@ CMD npm start
 
         // BTreeMap iteration is sorted ascending
         assert_eq!(env.args, vec!["A", "first", "Z", "last"]);
-    }
-
-    // ── normalize_build_name ──────────────────────────────────────────────────
-
-    #[test]
-    fn normalize_build_name_splits_tag() {
-        assert_eq!(
-            normalize_build_name("my-env:v1"),
-            ("my-env".to_string(), Some("v1".to_string()))
-        );
-        // No colon → no tag.
-        assert_eq!(normalize_build_name("my-env"), ("my-env".to_string(), None));
-        // Empty tag after colon → treated as no tag (whole string is the name).
-        assert_eq!(
-            normalize_build_name("my-env:"),
-            ("my-env".to_string(), None)
-        );
     }
 
     // ── build_in_background — no poll task ─────────────────────────────────────
@@ -1133,7 +1041,110 @@ CMD npm start
         assert_eq!(info.template_id, "tpl_bg");
         assert_eq!(info.build_id, "bld_bg");
         assert_eq!(info.name.as_deref(), Some("my-env"));
+        assert_eq!(info.alias.as_deref(), Some("my-env"));
 
         // wiremock asserts the status-endpoint `expect(0)` on server drop.
+    }
+
+    // ── tagged name sent whole (Fix 1) ────────────────────────────────────────
+
+    /// A name in `"name:tag"` form must be forwarded verbatim to
+    /// `POST /v3/templates` — the colon must NOT be stripped.
+    /// The returned [`BuildInfo`] must have `name == Some("my-env:v1")` and
+    /// `alias == Some("my-env:v1")`.
+    #[tokio::test]
+    async fn tagged_name_sent_whole_not_split() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        // The POST body must contain the WHOLE name including the colon.
+        Mock::given(method("POST"))
+            .and(path("/v3/templates"))
+            .and(body_partial_json(
+                serde_json::json!({ "name": "my-env:v1" }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "templateID": "tpl_tag",
+                "buildID": "bld_tag",
+                "aliases": [],
+                "names": ["my-env:v1"],
+                "public": false,
+                "tags": []
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/v2/templates/tpl_tag/builds/bld_tag"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let template = Template::new().from_image("node:20");
+        let opts = BuildOptions {
+            api_key: Some("e2b_0123456789abcdef".to_string()),
+            api_url: Some(server.uri()),
+            ..Default::default()
+        };
+
+        let info = template
+            .build_in_background("my-env:v1", opts)
+            .await
+            .expect("build_in_background should succeed");
+
+        assert_eq!(info.template_id, "tpl_tag");
+        assert_eq!(info.name.as_deref(), Some("my-env:v1"));
+        assert_eq!(info.alias.as_deref(), Some("my-env:v1"));
+    }
+
+    // ── default cpu/mem defaults (Fix 2) ──────────────────────────────────────
+
+    /// When no cpu or memory overrides are provided, the build request must
+    /// include `cpuCount: 2` and `memoryMB: 1024` — matching the JS SDK
+    /// default `cpuCount ?? 2, memoryMB ?? 1024`.
+    #[tokio::test]
+    async fn default_build_sends_cpu2_mem1024() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v3/templates"))
+            .and(body_partial_json(
+                serde_json::json!({ "cpuCount": 2, "memoryMB": 1024 }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "templateID": "tpl_def",
+                "buildID": "bld_def",
+                "aliases": [],
+                "names": ["my-env"],
+                "public": false,
+                "tags": []
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/v2/templates/tpl_def/builds/bld_def"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let template = Template::new().from_image("node:20");
+        let opts = BuildOptions {
+            api_key: Some("e2b_0123456789abcdef".to_string()),
+            api_url: Some(server.uri()),
+            ..Default::default()
+        };
+
+        let info = template
+            .build_in_background("my-env", opts)
+            .await
+            .expect("build_in_background with default cpu/mem should succeed");
+
+        assert_eq!(info.template_id, "tpl_def");
     }
 }
