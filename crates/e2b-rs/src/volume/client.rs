@@ -94,6 +94,35 @@ impl VolumeApiClient {
         Error::from_status(status.as_u16(), message)
     }
 
+    /// Send a request and discard the response body on success.
+    ///
+    /// Useful for `DELETE` and other 204-no-content endpoints where the
+    /// success response carries no JSON body. Mirrors [`crate::api::client::ApiClient::request_unit`].
+    pub(crate) async fn request_unit<B>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&B>,
+    ) -> Result<()>
+    where
+        B: Serialize + ?Sized,
+    {
+        let url = format!("{}{path}", self.base_url);
+        let mut req = self.http.request(method, &url);
+        if !query.is_empty() {
+            req = req.query(query);
+        }
+        if let Some(b) = body {
+            req = req.json(b);
+        }
+        let resp = req.send().await?;
+        if resp.status().is_success() {
+            return Ok(());
+        }
+        Err(Self::map_error_response(resp).await)
+    }
+
     /// Send a request and decode the JSON response body as `T`.
     ///
     /// An optional serializable `body` is sent as JSON. Non-2xx responses are

@@ -11,7 +11,10 @@ use crate::api::client::ApiClient;
 use crate::api::schema as api_schema;
 use crate::connection_config::{ConnectionConfig, ConnectionConfigOpts, REQUEST_TIMEOUT_MS};
 use crate::errors::{Error, Result};
-use crate::volume::types::{VolumeAndToken, VolumeInfo};
+use crate::volume::types::{
+    VolumeAndToken, VolumeEntryStat, VolumeInfo, VolumeListOpts, VolumeMakeDirOpts,
+    VolumeMetadataOpts,
+};
 
 /// Default per-request timeout stored in [`Volume`] when
 /// [`VolumeOpts::request_timeout_ms`] is `None`.
@@ -51,14 +54,11 @@ pub struct Volume {
     volume_id: String,
     name: String,
     token: String,
-    /// Resolved API/content base URL — stored for Tasks 3–4.
-    #[allow(dead_code)]
+    /// Resolved API/content base URL used to build [`crate::volume::client::VolumeApiClient`].
     api_url: String,
-    /// Stored for Tasks 3–4 content-client construction.
-    #[allow(dead_code)]
+    /// Per-request timeout passed to [`crate::volume::client::VolumeApiClient`].
     request_timeout_ms: u64,
-    /// Stored for Tasks 3–4 content-client construction.
-    #[allow(dead_code)]
+    /// Optional HTTP/HTTPS proxy URL passed to [`crate::volume::client::VolumeApiClient`].
     proxy: Option<String>,
 }
 
@@ -210,6 +210,186 @@ impl Volume {
             .await
         {
             Ok(()) => Ok(true),
+            Err(Error::NotFound(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+// ── Volume-content metadata operations ──────────────────────────────────────
+
+/// Private JSON body for `PATCH /volumecontent/{id}/path`.
+///
+/// Fields are omitted from serialization when `None` so that callers only
+/// send the metadata they want to update, mirroring the JS `updateMetadata`
+/// body shape.
+#[derive(serde::Serialize)]
+struct MetadataBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<u32>,
+}
+
+impl Volume {
+    /// Build a [`crate::volume::client::VolumeApiClient`] from this handle's
+    /// stored connection parameters.
+    fn build_content_client(&self) -> Result<crate::volume::client::VolumeApiClient> {
+        crate::volume::client::VolumeApiClient::new(
+            &self.api_url,
+            &self.token,
+            self.request_timeout_ms,
+            self.proxy.as_deref(),
+        )
+    }
+
+    /// List the entries of the directory at `path`.
+    ///
+    /// Named `list_dir` to avoid clashing with the control-plane
+    /// [`Volume::list`] associated function — Rust forbids a same-named
+    /// associated function and instance method in one `impl` block.
+    ///
+    /// Mirrors JS `volume.list(path, opts)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::Error::NotFound`] with the message
+    /// `"Path {path} not found"` on HTTP 404, mirroring the JS error message.
+    pub async fn list_dir(&self, path: &str, opts: VolumeListOpts) -> Result<Vec<VolumeEntryStat>> {
+        let client = self.build_content_client()?;
+        let endpoint = format!("/volumecontent/{}/dir", self.volume_id);
+        let mut query: Vec<(&str, String)> = vec![("path", path.to_string())];
+        if let Some(d) = opts.depth {
+            query.push(("depth", d.to_string()));
+        }
+        let listing: crate::volume::schema::VolumeDirectoryListing = client
+            .request_json(reqwest::Method::GET, &endpoint, &query, None::<&()>)
+            .await
+            .map_err(|e| match e {
+                Error::NotFound(_) => Error::NotFound(format!("Path {path} not found")),
+                other => other,
+            })?;
+        Ok(listing
+            .0
+            .into_iter()
+            .map(VolumeEntryStat::from_wire)
+            .collect())
+    }
+
+    /// Create a directory at `path`.
+    ///
+    /// Mirrors JS `volume.makeDir(path, opts)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::Error::NotFound`] with the message
+    /// `"Path {path} not found"` on HTTP 404, mirroring the JS error message.
+    pub async fn make_dir(&self, path: &str, opts: VolumeMakeDirOpts) -> Result<VolumeEntryStat> {
+        let client = self.build_content_client()?;
+        let endpoint = format!("/volumecontent/{}/dir", self.volume_id);
+        let mut query: Vec<(&str, String)> = vec![("path", path.to_string())];
+        if let Some(u) = opts.uid {
+            query.push(("uid", u.to_string()));
+        }
+        if let Some(g) = opts.gid {
+            query.push(("gid", g.to_string()));
+        }
+        if let Some(m) = opts.mode {
+            query.push(("mode", m.to_string()));
+        }
+        if let Some(f) = opts.force {
+            query.push(("force", if f { "true" } else { "false" }.to_string()));
+        }
+        let stat: crate::volume::schema::VolumeEntryStat = client
+            .request_json(reqwest::Method::POST, &endpoint, &query, None::<&()>)
+            .await
+            .map_err(|e| match e {
+                Error::NotFound(_) => Error::NotFound(format!("Path {path} not found")),
+                other => other,
+            })?;
+        Ok(VolumeEntryStat::from_wire(stat))
+    }
+
+    /// Return metadata for the file or directory at `path`.
+    ///
+    /// Named `stat` to avoid clashing with the control-plane
+    /// [`Volume::get_info`] associated function.
+    ///
+    /// Mirrors JS `volume.getInfo(path)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::Error::NotFound`] with the message
+    /// `"Path {path} not found"` on HTTP 404, mirroring the JS error message.
+    pub async fn stat(&self, path: &str) -> Result<VolumeEntryStat> {
+        let client = self.build_content_client()?;
+        let endpoint = format!("/volumecontent/{}/path", self.volume_id);
+        let query: Vec<(&str, String)> = vec![("path", path.to_string())];
+        let stat: crate::volume::schema::VolumeEntryStat = client
+            .request_json(reqwest::Method::GET, &endpoint, &query, None::<&()>)
+            .await
+            .map_err(|e| match e {
+                Error::NotFound(_) => Error::NotFound(format!("Path {path} not found")),
+                other => other,
+            })?;
+        Ok(VolumeEntryStat::from_wire(stat))
+    }
+
+    /// Update the metadata (uid / gid / mode) of the entry at `path`.
+    ///
+    /// Only fields set in `metadata` are sent in the request body; omitted
+    /// fields are left unchanged on the server.
+    ///
+    /// Mirrors JS `volume.updateMetadata(path, metadata)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::Error::NotFound`] with the message
+    /// `"Path {path} not found"` on HTTP 404, mirroring the JS error message.
+    pub async fn update_metadata(
+        &self,
+        path: &str,
+        metadata: VolumeMetadataOpts,
+    ) -> Result<VolumeEntryStat> {
+        let client = self.build_content_client()?;
+        let endpoint = format!("/volumecontent/{}/path", self.volume_id);
+        let query: Vec<(&str, String)> = vec![("path", path.to_string())];
+        let body = MetadataBody {
+            uid: metadata.uid,
+            gid: metadata.gid,
+            mode: metadata.mode,
+        };
+        let stat: crate::volume::schema::VolumeEntryStat = client
+            .request_json(reqwest::Method::PATCH, &endpoint, &query, Some(&body))
+            .await
+            .map_err(|e| match e {
+                Error::NotFound(_) => Error::NotFound(format!("Path {path} not found")),
+                other => other,
+            })?;
+        Ok(VolumeEntryStat::from_wire(stat))
+    }
+
+    /// Remove the file or directory at `path`.
+    ///
+    /// Mirrors JS `volume.remove(path)`.
+    pub async fn remove(&self, path: &str) -> Result<()> {
+        let client = self.build_content_client()?;
+        let endpoint = format!("/volumecontent/{}/path", self.volume_id);
+        let query: Vec<(&str, String)> = vec![("path", path.to_string())];
+        client
+            .request_unit(reqwest::Method::DELETE, &endpoint, &query, None::<&()>)
+            .await
+    }
+
+    /// Return `true` if the path exists in the volume, `false` if it does not.
+    ///
+    /// Calls [`Volume::stat`] internally; HTTP 404 maps to `Ok(false)` and any
+    /// other error is propagated. Mirrors JS `volume.exists(path)`.
+    pub async fn exists(&self, path: &str) -> Result<bool> {
+        match self.stat(path).await {
+            Ok(_) => Ok(true),
             Err(Error::NotFound(_)) => Ok(false),
             Err(e) => Err(e),
         }
@@ -369,5 +549,213 @@ mod tests {
         // `Err(Error::InvalidArgument(...))` here, so any success confirms the
         // proxy field was accepted by `reqwest::ClientBuilder`.
         Volume::build_api_client(&opts).expect("client builds with proxy set");
+    }
+
+    // ── Content-method tests ─────────────────────────────────────────────────
+
+    use crate::volume::types::{
+        VolumeFileType, VolumeListOpts, VolumeMakeDirOpts, VolumeMetadataOpts,
+    };
+    use wiremock::matchers::query_param;
+
+    /// Build a [`Volume`] pointing at the wiremock server with a test Bearer
+    /// token, bypassing the control-plane API entirely.
+    fn vol_for(server: &MockServer) -> Volume {
+        Volume::from_parts(
+            "vol_1".to_string(),
+            "test-volume".to_string(),
+            "tkn".to_string(),
+            server.uri(),
+            5_000,
+            None,
+        )
+    }
+
+    /// Returns a minimal honest `VolumeEntryStat` JSON fixture.
+    /// `"type"` is **lowercase** as returned by the real API.
+    fn entry_json(name: &str, path: &str, file_type: &str) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "path": path,
+            "size": 0_i64,
+            "mode": 420_u32,
+            "uid": 1000_u32,
+            "gid": 0_u32,
+            "type": file_type,
+            "atime": "2024-01-01T00:00:00Z",
+            "mtime": "2024-01-01T00:00:00Z",
+            "ctime": "2024-01-01T00:00:00Z"
+        })
+    }
+
+    #[tokio::test]
+    async fn list_dir_returns_entries() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/volumecontent/vol_1/dir"))
+            .and(query_param("path", "/"))
+            .and(header("Authorization", "Bearer tkn"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                entry_json("a.txt", "/a.txt", "file"),
+                entry_json("subdir", "/subdir", "directory"),
+            ])))
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        let entries = vol
+            .list_dir("/", VolumeListOpts::default())
+            .await
+            .expect("list_dir ok");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].file_type, VolumeFileType::File);
+        assert_eq!(entries[1].file_type, VolumeFileType::Directory);
+    }
+
+    #[tokio::test]
+    async fn make_dir_creates() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/volumecontent/vol_1/dir"))
+            .and(query_param("path", "/new-dir"))
+            .and(query_param("uid", "1000"))
+            .and(header("Authorization", "Bearer tkn"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(entry_json(
+                "new-dir",
+                "/new-dir",
+                "directory",
+            )))
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        let entry = vol
+            .make_dir(
+                "/new-dir",
+                VolumeMakeDirOpts {
+                    uid: Some(1000),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("make_dir ok");
+        assert_eq!(entry.file_type, VolumeFileType::Directory);
+        assert_eq!(entry.path, "/new-dir");
+    }
+
+    #[tokio::test]
+    async fn stat_returns_entry() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/volumecontent/vol_1/path"))
+            .and(query_param("path", "/a"))
+            .and(header("Authorization", "Bearer tkn"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(entry_json("a", "/a", "file")))
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        let entry = vol.stat("/a").await.expect("stat ok");
+        assert_eq!(entry.file_type, VolumeFileType::File);
+        assert_eq!(entry.path, "/a");
+    }
+
+    #[tokio::test]
+    async fn update_metadata_patches() {
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .and(path("/volumecontent/vol_1/path"))
+            .and(query_param("path", "/a"))
+            .and(body_partial_json(serde_json::json!({"uid": 1000})))
+            .and(header("Authorization", "Bearer tkn"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(entry_json("a", "/a", "file")))
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        let entry = vol
+            .update_metadata(
+                "/a",
+                VolumeMetadataOpts {
+                    uid: Some(1000),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("update_metadata ok");
+        assert_eq!(entry.file_type, VolumeFileType::File);
+    }
+
+    #[tokio::test]
+    async fn remove_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/volumecontent/vol_1/path"))
+            .and(query_param("path", "/a"))
+            .and(header("Authorization", "Bearer tkn"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        vol.remove("/a").await.expect("remove ok");
+    }
+
+    #[tokio::test]
+    async fn exists_true() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/volumecontent/vol_1/path"))
+            .and(query_param("path", "/a"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(entry_json("a", "/a", "file")))
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        assert!(vol.exists("/a").await.expect("exists ok"));
+    }
+
+    #[tokio::test]
+    async fn exists_false() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/volumecontent/vol_1/path"))
+            .and(query_param("path", "/missing"))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_json(
+                    serde_json::json!({"code": "not_found", "message": "not found"}),
+                ),
+            )
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        let result = vol
+            .exists("/missing")
+            .await
+            .expect("exists returns Ok(false) for 404");
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn stat_404_path_message() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/volumecontent/vol_1/path"))
+            .and(query_param("path", "/gone"))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_json(
+                    serde_json::json!({"code": "not_found", "message": "not found"}),
+                ),
+            )
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        let err = vol.stat("/gone").await.expect_err("stat should Err on 404");
+        assert!(
+            matches!(&err, Error::NotFound(msg) if msg.contains("/gone")),
+            "expected NotFound with path in message, got: {err:?}",
+        );
     }
 }
