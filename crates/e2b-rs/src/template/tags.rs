@@ -125,13 +125,14 @@ impl Template {
     /// Issues `GET /templates/aliases/{name}`:
     /// - `200` → `Ok(true)` — the alias exists.
     /// - `404` → `Ok(false)` — no such alias.
-    /// - Any other error (including `403 Forbidden` / not-owner) is
-    ///   propagated as `Err`.
+    /// - `403` → `Ok(true)` — the alias exists but is owned by another team
+    ///   (matches the JS SDK's "exists but not yours" behavior).
+    /// - Any other error is propagated as `Err`.
     ///
     /// # Errors
     ///
     /// Returns an error if the API key is missing, invalid, or the server
-    /// returns a non-200/404 status code.
+    /// returns a status other than 200/404/403.
     pub async fn exists(name: &str, opts: TemplateApiOpts) -> Result<bool> {
         let api = build_api_client(&opts)?;
         match api
@@ -145,6 +146,10 @@ impl Template {
         {
             Ok(()) => Ok(true),
             Err(Error::NotFound(_)) => Ok(false),
+            // 403 means the alias resolves to a template owned by another team
+            // — it exists, you just can't see it. Matches the JS SDK
+            // (`checkAliasExists`: `if status === 403 return true`).
+            Err(Error::Forbidden(_)) => Ok(true),
             Err(e) => Err(e),
         }
     }
@@ -255,7 +260,8 @@ mod tests {
 
     // ── exists_true_false_forbidden ───────────────────────────────────────────
 
-    /// `exists` must return `true` for 200, `false` for 404, and `Err` for 403.
+    /// `exists` must return `true` for 200, `false` for 404, and `true` for 403
+    /// (alias exists but owned by another team — matches the JS SDK).
     #[tokio::test]
     async fn exists_true_false_forbidden() {
         // ── 200 → true ──
@@ -289,7 +295,7 @@ mod tests {
             assert!(!result, "404 must map to false");
         }
 
-        // ── 403 → Err ──
+        // ── 403 → true (exists but not yours) ──
         {
             let server = MockServer::start().await;
             Mock::given(method("GET"))
@@ -300,8 +306,10 @@ mod tests {
                 )
                 .mount(&server)
                 .await;
-            let result = Template::exists("my-tpl", test_opts(&server)).await;
-            assert!(result.is_err(), "403 must propagate as Err");
+            let result = Template::exists("my-tpl", test_opts(&server))
+                .await
+                .expect("exists must succeed on 403");
+            assert!(result, "403 must map to true (exists but not owner)");
         }
     }
 

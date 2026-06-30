@@ -36,6 +36,11 @@ pub enum Error {
     /// Authentication failed (JS `AuthenticationError`).
     #[error("{0}")]
     Authentication(String),
+    /// The request was authenticated but not authorized (HTTP 403). For some
+    /// existence probes (e.g. a template alias owned by another team) this is a
+    /// meaningful "exists but not yours" signal rather than a hard failure.
+    #[error("{0}")]
+    Forbidden(String),
     /// Git authentication failed (JS `GitAuthError`).
     #[error("{0}")]
     GitAuth(String),
@@ -101,6 +106,7 @@ impl Error {
         match status {
             400 => Error::InvalidArgument(message),
             401 => Error::Authentication(message),
+            403 => Error::Forbidden(message),
             404 => Error::NotFound(message),
             409 => Error::Conflict(message),
             429 => Error::RateLimit(message),
