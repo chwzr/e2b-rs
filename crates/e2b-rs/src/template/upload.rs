@@ -134,9 +134,20 @@ pub(crate) async fn upload_file(
     // even if the upload blocks for a long time.
     drop(archive);
 
+    // The buffered byte count is authoritative for `Content-Length` — deriving
+    // it from `bytes.len()` (rather than the caller-supplied `size`) guarantees
+    // the advertised length always matches the body actually sent, so a stale
+    // `size` argument can never produce a mismatched header. They are expected
+    // to agree (both originate from the same spooled archive).
+    let content_length = u64::try_from(bytes.len()).unwrap_or(size);
+    debug_assert_eq!(
+        content_length, size,
+        "upload_file: buffered archive length must match the declared size"
+    );
+
     let resp = http
         .put(url)
-        .header(reqwest::header::CONTENT_LENGTH, size)
+        .header(reqwest::header::CONTENT_LENGTH, content_length)
         .body(reqwest::Body::from(bytes))
         .timeout(Duration::from_millis(timeout_ms))
         .send()
