@@ -132,6 +132,25 @@ pub(crate) async fn pause_sandbox(
     }
 }
 
+/// Fetch sandbox resource metrics over an optional `[start, end]` unix-second
+/// window. `GET /sandboxes/{id}/metrics` returns `SandboxMetric[]`.
+pub(crate) async fn get_sandbox_metrics(
+    api: &ApiClient,
+    sandbox_id: &str,
+    start: Option<i64>,
+    end: Option<i64>,
+) -> Result<Vec<api_schema::SandboxMetric>> {
+    let mut query: Vec<(&str, String)> = Vec::new();
+    if let Some(start) = start {
+        query.push(("start", start.to_string()));
+    }
+    if let Some(end) = end {
+        query.push(("end", end.to_string()));
+    }
+    let path = format!("/sandboxes/{sandbox_id}/metrics");
+    api.request(reqwest::Method::GET, &path, &query, None).await
+}
+
 /// Set the sandbox timeout (from now).
 pub(crate) async fn set_sandbox_timeout(
     api: &ApiClient,
@@ -296,5 +315,31 @@ mod tests {
                 .await
                 .expect("pause idempotent")
         );
+    }
+
+    fn metric_json() -> serde_json::Value {
+        serde_json::json!({
+            "cpuCount": 2, "cpuUsedPct": 12.5,
+            "diskTotal": 1000, "diskUsed": 100,
+            "memCache": 10, "memTotal": 2048, "memUsed": 512,
+            "timestamp": "2026-06-30T10:00:00Z", "timestampUnix": 1780000000
+        })
+    }
+
+    #[tokio::test]
+    async fn get_metrics_returns_samples() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/sandboxes/sbx_m/metrics"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([metric_json()])),
+            )
+            .mount(&server)
+            .await;
+        let out = get_sandbox_metrics(&api_for(&server), "sbx_m", None, None)
+            .await
+            .expect("metrics");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].cpu_count, 2);
     }
 }

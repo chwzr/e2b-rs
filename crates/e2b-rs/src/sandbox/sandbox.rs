@@ -6,10 +6,11 @@ use std::time::Duration;
 
 use crate::api::client::ApiClient;
 use crate::connection_config::ConnectionConfig;
-use crate::errors::Result;
+use crate::envd::versions::version_gte;
+use crate::errors::{Error, Result};
 use crate::sandbox::api;
 use crate::sandbox::opts::{SandboxConnectOpts, SandboxCreateOpts};
-use crate::sandbox::types::{SandboxInfo, SandboxState};
+use crate::sandbox::types::{SandboxInfo, SandboxMetrics, SandboxState};
 
 /// A boxed future returned by the lifecycle builders.
 type SandboxFuture = Pin<Box<dyn Future<Output = Result<Sandbox>> + Send>>;
@@ -33,8 +34,7 @@ pub struct Sandbox {
     pub(crate) sandbox_id: String,
     /// Optional per-sandbox domain override.
     pub(crate) sandbox_domain: Option<String>,
-    /// envd version string; read by envd I/O in Plan 3b.
-    #[allow(dead_code)] // read by envd I/O in Plan 3b
+    /// envd version string; used by version gates and envd I/O in Plan 3b.
     pub(crate) envd_version: String,
     /// Access token for envd communication; read by envd I/O in Plan 3b.
     #[allow(dead_code)] // read by envd I/O in Plan 3b
@@ -107,6 +107,22 @@ impl Sandbox {
             self.get_info().await?.state,
             SandboxState::Running
         ))
+    }
+
+    /// Fetch the sandbox's resource-usage metrics.
+    ///
+    /// # Errors
+    /// Returns [`Error::Template`] if the sandbox's envd is older than `0.1.5`
+    /// (metrics are unsupported), matching the JS SDK.
+    pub async fn get_metrics(&self) -> Result<Vec<SandboxMetrics>> {
+        if !version_gte(&self.envd_version, "0.1.5") {
+            return Err(Error::Template(
+                "Metrics require a newer template (envd >= 0.1.5); rebuild the template."
+                    .to_string(),
+            ));
+        }
+        let raw = api::get_sandbox_metrics(&self.api, &self.sandbox_id, None, None).await?;
+        Ok(raw.into_iter().map(SandboxMetrics::from_metric).collect())
     }
 
     /// List sandboxes (paginated). Filter by state/metadata via [`crate::SandboxListOpts`].

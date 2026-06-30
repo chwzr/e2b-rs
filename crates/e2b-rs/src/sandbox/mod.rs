@@ -13,4 +13,4 @@ pub mod types;
 pub use opts::{SandboxConnectOpts, SandboxCreateOpts, SandboxListOpts};
 pub use paginator::SandboxPaginator;
 pub use sandbox::{Sandbox, SandboxConnectBuilder, SandboxCreateBuilder};
-pub use types::{SandboxInfo, SandboxState};
+pub use types::{SandboxInfo, SandboxMetrics, SandboxState};

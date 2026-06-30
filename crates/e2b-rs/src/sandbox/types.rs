@@ -69,9 +69,66 @@ impl SandboxInfo {
     }
 }
 
+/// Point-in-time resource usage for a sandbox (see [`Sandbox::get_metrics`]).
+#[derive(Debug, Clone)]
+pub struct SandboxMetrics {
+    /// When the sample was taken.
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Number of virtual CPUs.
+    pub cpu_count: u32,
+    /// CPU usage as a percentage (0–100).
+    pub cpu_used_pct: f64,
+    /// Memory used, in bytes.
+    pub mem_used_bytes: u64,
+    /// Total memory, in bytes.
+    pub mem_total_bytes: u64,
+    /// Page-cache memory, in bytes.
+    pub mem_cache_bytes: u64,
+    /// Disk used, in bytes.
+    pub disk_used_bytes: u64,
+    /// Total disk, in bytes.
+    pub disk_total_bytes: u64,
+}
+
+impl SandboxMetrics {
+    /// Map the generated wire metric to the public type (clamping negatives to 0).
+    pub(crate) fn from_metric(m: crate::api::schema::SandboxMetric) -> SandboxMetrics {
+        SandboxMetrics {
+            timestamp: m.timestamp,
+            cpu_count: u32::try_from(m.cpu_count).unwrap_or(0),
+            cpu_used_pct: f64::from(m.cpu_used_pct),
+            mem_used_bytes: u64::try_from(m.mem_used).unwrap_or(0),
+            mem_total_bytes: u64::try_from(m.mem_total).unwrap_or(0),
+            mem_cache_bytes: u64::try_from(m.mem_cache).unwrap_or(0),
+            disk_used_bytes: u64::try_from(m.disk_used).unwrap_or(0),
+            disk_total_bytes: u64::try_from(m.disk_total).unwrap_or(0),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metrics_map_from_generated() {
+        let raw = crate::api::schema::SandboxMetric {
+            cpu_count: 2,
+            cpu_used_pct: 12.5,
+            disk_total: 1000,
+            disk_used: 100,
+            mem_cache: 10,
+            mem_total: 2048,
+            mem_used: 512,
+            timestamp: "2026-06-30T10:00:00Z".parse().expect("ts"),
+            timestamp_unix: 1_780_000_000,
+        };
+        let m = SandboxMetrics::from_metric(raw);
+        assert_eq!(m.cpu_count, 2);
+        assert_eq!(m.mem_used_bytes, 512);
+        assert_eq!(m.disk_total_bytes, 1000);
+        assert!((m.cpu_used_pct - 12.5).abs() < f64::EPSILON);
+    }
 
     #[test]
     fn sandbox_info_converts_from_detail_json() {
