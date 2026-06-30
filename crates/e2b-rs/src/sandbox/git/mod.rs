@@ -48,6 +48,25 @@ fn repo_path_for_scope(scope: GitConfigScope, path: Option<&str>) -> Result<Opti
     }
 }
 
+/// Promote a non-zero exit from a `git remote set-url` plumbing call to
+/// [`Error::InvalidArgument`].
+///
+/// The two `set-url` commands inside [`Git::with_remote_credentials`] are
+/// internal plumbing.  A silently swallowed non-zero would either leave
+/// credentials embedded in `.git/config` (failed restore) or run the
+/// operation against the wrong URL (failed cred set).  Matching the JS SDK
+/// where every `runGit` throws on non-zero, we surface the failure here.
+fn check_set_url_exit(result: CommandResult) -> Result<CommandResult> {
+    if result.exit_code != 0 {
+        return Err(Error::InvalidArgument(format!(
+            "git remote set-url failed (exit {}): {}",
+            result.exit_code,
+            result.stderr.trim()
+        )));
+    }
+    Ok(result)
+}
+
 // ---------------------------------------------------------------------------
 // Reset mode
 // ---------------------------------------------------------------------------
@@ -419,17 +438,23 @@ impl Git {
         let original_url = self.get_remote_url(path, remote, run_user.clone()).await?;
         let cred_url = with_credentials(&original_url, Some(username), Some(password))?;
 
-        // Set credentialed URL.
+        // Set credentialed URL — non-zero exit is promoted to Err so the op is
+        // never run against the wrong (uncredentialed) URL.
         let set_cmd = build_git_command(&["remote", "set-url", remote, &cred_url], Some(path));
-        self.run_cmd(&set_cmd, run_user.clone()).await?;
+        check_set_url_exit(self.run_cmd(&set_cmd, run_user.clone()).await?)?;
 
         // Run the operation, capturing any error.
         let op_result = op.await;
 
-        // Always restore the original URL.
+        // Always restore the original URL — non-zero exit is promoted to Err
+        // so a failed restore (credentials left in .git/config) never slips
+        // through silently.  Op error still takes priority (JS ordering).
         let restore_cmd =
             build_git_command(&["remote", "set-url", remote, &original_url], Some(path));
-        let restore_result = self.run_cmd(&restore_cmd, run_user).await;
+        let restore_result = self
+            .run_cmd(&restore_cmd, run_user)
+            .await
+            .and_then(check_set_url_exit);
 
         // Op error takes priority; then restore error.
         match (op_result, restore_result) {
@@ -1209,6 +1234,37 @@ mod tests {
         let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
         let err = git
             .push("/repo", GitPushOpts::default())
+            .await
+            .expect_err("upstream error must be Err");
+        assert!(
+            matches!(err, crate::errors::Error::GitUpstream(_)),
+            "expected GitUpstream, got {err:?}"
+        );
+    }
+
+    /// Non-credentialed `git pull` with no remote and no branch, when the
+    /// current branch has no upstream tracking branch, must return
+    /// `Err(Error::GitUpstream(_))`.
+    ///
+    /// The pre-check calls `git rev-parse --abbrev-ref --symbolic-full-name @{u}`
+    /// (`has_upstream`).  A non-zero exit makes `has_upstream` return `false`,
+    /// which triggers the upstream error before any pull command runs.
+    #[tokio::test]
+    async fn pull_non_credentialed_upstream_error() {
+        let server = MockServer::start().await;
+        // A non-zero exit from the rev-parse probe is enough — no special stderr needed.
+        Mock::given(method("POST"))
+            .and(path("/process.Process/Start"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/connect+json")
+                    .set_body_bytes(proc_stream(128)),
+            )
+            .mount(&server)
+            .await;
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+        let err = git
+            .pull("/repo", GitPullOpts::default())
             .await
             .expect_err("upstream error must be Err");
         assert!(
