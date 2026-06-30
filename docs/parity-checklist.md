@@ -147,6 +147,42 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 >
 > **Parity quirk:** On the **credentialed** push/pull path (`with_remote_credentials`), auth/upstream errors are NOT mapped to `Err` — this matches the JS SDK asymmetry (see task-3 report). The `get_config` and `remote_get` methods use a `|| true` shell fallback so a missing key/remote returns `Ok(None)` rather than `Err`.
 
-## Volume & Template (Plan 4b / Plan 5)
+## Volume (Plan 4b)
 
-_Rows added as each milestone lands._
+### Control-plane (`Volume::*` static methods, X-API-KEY transport)
+
+| JS (`volumes.*`) | Rust (`e2b_rs::Volume::*`) | Status |
+|---|---|---|
+| `create(name, opts)` | `Volume::create(name, VolumeOpts)` → `Volume` | ✅ |
+| `list(opts)` | `Volume::list(VolumeOpts)` → `Vec<VolumeInfo>` | ✅ |
+| `getInfo(id, opts)` | `Volume::get_info(id, VolumeOpts)` → `VolumeAndToken` | ✅ |
+| `connect(id, opts)` | `Volume::connect(id, VolumeOpts)` → `Volume` | ✅ |
+| `destroy(id, opts)` | `Volume::destroy(id, VolumeOpts)` → `bool` (404 → false) | ✅ |
+
+### Content (`volume.*` instance methods, Bearer-token transport)
+
+| JS (`volume.*`) | Rust (`volume.*`) | Notes | Status |
+|---|---|---|---|
+| `list(path, opts)` | `list_dir(path, VolumeListOpts)` | Renamed to avoid Rust assoc-fn/method clash (JS allows static + instance `list`; Rust does not). No pagination. | ✅ |
+| `makeDir(path, opts)` | `make_dir(path, VolumeMakeDirOpts)` | `uid`/`gid`/`mode`/`force` sent as query params. | ✅ |
+| `getInfo(path)` | `stat(path)` | Renamed to avoid clash with control-plane `get_info`. 404 → `Err(NotFound)`. | ✅ |
+| `updateMetadata(path, meta)` | `update_metadata(path, VolumeMetadataOpts)` | `uid`/`gid`/`mode` sent as JSON body. | ✅ |
+| `readFile(path, {format:'text'})` | `read_file(path)` → `String` | Uses 1-hour file timeout. | ✅ |
+| `readFile(path, {format:'bytes'})` | `read_file_bytes(path)` → `Vec<u8>` | Uses 1-hour file timeout. | ✅ |
+| `readFile(path, {format:'stream'})` | `read_file_stream(path, VolumeReadOpts)` → `impl Stream<Item=Result<Bytes>>` | Uses 1-hour file timeout. | ✅ |
+| `readFile(path, {format:'blob'})` | N/A | `Blob` is a browser type with no Rust equivalent; not exposed. | ⬜ |
+| `writeFile(path, data, opts)` | `write_file(path, data, VolumeWriteOpts)` → `VolumeEntryStat` | `uid`/`gid`/`mode`/`force` sent as query params; body as `application/octet-stream`. Uses 1-hour file timeout. | ✅ |
+| `remove(path)` | `remove(path)` | 404 → `Err(NotFound)`. | ✅ |
+| `exists(path)` | `exists(path)` → `bool` | Delegates to `stat`; 404 → `Ok(false)`. | ✅ |
+
+### Notes
+
+- **Transport split:** control-plane calls use `X-API-KEY` header (same as sandbox API); content calls use `Authorization: Bearer <token>` where the token is obtained via `create`/`connect`/`get_info`.
+- **No pagination:** `list`/`list_dir` return all results in a single response; the JS SDK has no paginator for volumes either.
+- **Metadata via query params:** `make_dir` and `write_file` pass `uid`/`gid`/`mode`/`force` as URL query parameters, matching the volume content API spec.
+- **1-hour file timeout:** `read_file*` and `write_file` use a dedicated 60-minute timeout (`FILE_TIMEOUT_MS`) rather than the 60-second metadata default, mirroring the JS SDK's `requestTimeoutMs: opts?.requestTimeoutMs ?? FILE_TIMEOUT_MS`.
+- **Carry-forwards:** JS `VolumeApiOpts` debug/logger/signal fields not exposed (minimal opts); per-call `requestTimeoutMs` / proxy passthrough scope; `Volume` rebuilds `VolumeApiClient` per call (same as JS).
+
+## Template (Plan 5)
+
+_Rows added when Plan 5 lands._

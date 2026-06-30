@@ -87,6 +87,19 @@
 //! # }
 //! ```
 //!
+//! ## Volumes
+//!
+//! ```no_run
+//! # async fn run() -> e2b_rs::Result<()> {
+//! use e2b_rs::Volume;
+//! let volume = Volume::create("my-data", Default::default()).await?;
+//! volume.write_file("/hello.txt", b"hi".to_vec(), Default::default()).await?;
+//! let text = volume.read_file("/hello.txt").await?;
+//! println!("{text}");
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Resolving configuration
 //!
 //! ```
@@ -105,7 +118,7 @@ pub(crate) mod http;
 
 pub(crate) mod envd;
 
-pub(crate) mod volume;
+pub mod volume;
 
 pub(crate) mod api;
 
@@ -144,3 +157,8 @@ pub use sandbox::{
 pub mod paginator;
 
 pub use paginator::PaginationState;
+
+pub use volume::{
+    Volume, VolumeAndToken, VolumeEntryStat, VolumeFileType, VolumeInfo, VolumeListOpts,
+    VolumeMakeDirOpts, VolumeMetadataOpts, VolumeOpts, VolumeReadOpts, VolumeWriteOpts,
+};

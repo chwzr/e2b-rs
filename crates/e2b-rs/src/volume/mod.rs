@@ -1,7 +1,22 @@
-//! Volume content client and generated wire types. Client wiring lands in a
-//! later milestone.
+//! Volume control-plane and content client, plus public types.
+//!
+//! The generated wire types in the internal `schema` module stay crate-private.
+//! All user-facing types are re-exported here and again at the crate root.
 
 pub(crate) mod schema;
+
+pub(crate) mod client;
+
+pub mod types;
+
+pub(crate) mod control;
+
+pub use types::{
+    VolumeAndToken, VolumeEntryStat, VolumeFileType, VolumeInfo, VolumeListOpts, VolumeMakeDirOpts,
+    VolumeMetadataOpts, VolumeReadOpts, VolumeWriteOpts,
+};
+
+pub use control::{Volume, VolumeOpts};
 
 #[cfg(test)]
 mod tests {
