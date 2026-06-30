@@ -66,8 +66,21 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 | `sandbox.getHost` | `Sandbox::get_host` | ✅ |
 | `sandbox.isRunning` | `Sandbox::is_running` (control-plane state; envd `/health` in 3b) | 🔶 |
 | `Sandbox.list` / `SandboxPaginator` | `Sandbox::list` + `SandboxPaginator` | ✅ |
-| `pause`/`betaPause`/resume/`getMetrics`/snapshots/`updateNetwork`/MCP/signed-URLs | _(Plan 3a-extras)_ | ⬜ |
+| `pause`/`betaPause`/resume/`getMetrics`/snapshots/`updateNetwork`/MCP/signed-URLs | _(Plan 3a-extras — see below)_ | ✅ |
 | `files`/`commands`/`pty` | _(Plans 3b/3c)_ | ⬜ |
+
+## Sandbox control-plane extras (Plan 3a-extras)
+
+| JS (`src/sandbox/...`) | Rust (`e2b_rs::...`) | Status |
+|---|---|---|
+| `sandbox.pause` / `betaPause` | `Sandbox::pause` (409→false) | ✅ |
+| `sandbox.getMetrics` | `Sandbox::get_metrics` → `SandboxMetrics` | ✅ |
+| `sandbox.createSnapshot` | `Sandbox::create_snapshot` → `SnapshotInfo` | ✅ |
+| `Sandbox.listSnapshots` / `SnapshotPaginator` | `Sandbox::list_snapshots` + `SnapshotPaginator` | ✅ |
+| `SandboxApi.deleteSnapshot` | `Sandbox::delete_snapshot` | ✅ |
+| `sandbox.updateNetwork` | `Sandbox::update_network` (atomic) | ✅ |
+| `sandbox.uploadUrl` / `downloadUrl` | `Sandbox::upload_url` / `download_url` | ✅ |
+| `sandbox.getMcpUrl` / `getMcpToken` / `create({mcp})` | _(deferred: needs files.read + hand-authored McpServer)_ | ⬜ |
 
 ## Sandbox & I/O (Plan 3, remaining) · Git & Volume (Plan 4) · Template (Plan 5)
 

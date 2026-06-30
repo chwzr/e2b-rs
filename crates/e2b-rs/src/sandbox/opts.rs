@@ -58,8 +58,8 @@ pub struct SnapshotListOpts {
     pub connection: ConnectionConfigOpts,
 }
 
-/// Options for building signed file URLs ([`Sandbox::upload_url`] /
-/// [`Sandbox::download_url`]).
+/// Options for building signed file URLs ([`crate::Sandbox::upload_url`] /
+/// [`crate::Sandbox::download_url`]).
 #[derive(Default)]
 pub struct SandboxUrlOpts {
     /// The sandbox user the URL authorizes (defaults to `user` on older envd).

@@ -143,7 +143,7 @@ impl Sandbox {
     }
 
     /// List snapshots (paginated). Filter by source sandbox via
-    /// [`SnapshotListOpts::sandbox_id`].
+    /// [`crate::SnapshotListOpts::sandbox_id`].
     pub fn list_snapshots(
         opts: crate::sandbox::opts::SnapshotListOpts,
     ) -> Result<crate::sandbox::snapshot_paginator::SnapshotPaginator> {

@@ -22,6 +22,21 @@
 //! # }
 //! ```
 //!
+//! ## Pausing, metrics, and snapshots
+//!
+//! ```no_run
+//! # async fn run() -> e2b_rs::Result<()> {
+//! use e2b_rs::Sandbox;
+//! let sandbox = Sandbox::create().template("base").await?;
+//! let metrics = sandbox.get_metrics().await?;
+//! println!("{} samples", metrics.len());
+//! let snap = sandbox.create_snapshot(Some("nightly".to_string())).await?;
+//! println!("snapshot {}", snap.snapshot_id);
+//! sandbox.pause().await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Resolving configuration
 //!
 //! ```

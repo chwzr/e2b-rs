@@ -69,7 +69,7 @@ impl SandboxInfo {
     }
 }
 
-/// Metadata for a sandbox snapshot (see [`Sandbox::create_snapshot`]).
+/// Metadata for a sandbox snapshot (see [`crate::Sandbox::create_snapshot`]).
 #[derive(Debug, Clone)]
 pub struct SnapshotInfo {
     /// The snapshot's identifier (also usable as a template id).
@@ -88,7 +88,7 @@ impl SnapshotInfo {
     }
 }
 
-/// Point-in-time resource usage for a sandbox (see [`Sandbox::get_metrics`]).
+/// Point-in-time resource usage for a sandbox (see [`crate::Sandbox::get_metrics`]).
 #[derive(Debug, Clone)]
 pub struct SandboxMetrics {
     /// When the sample was taken.
