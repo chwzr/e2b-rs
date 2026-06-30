@@ -26,7 +26,8 @@ pub struct FsWriteOpts {
     pub use_octet_stream: Option<bool>,
 }
 
-/// Validate metadata keys (RFC 7230 token chars) and values (US-ASCII).
+/// Validate metadata keys (RFC 7230 token chars) and values (printable US-ASCII,
+/// `\x20..=\x7e`), matching the JS SDK's `validateMetadata`.
 fn validate_metadata(metadata: &BTreeMap<String, String>) -> Result<()> {
     fn is_token_char(c: char) -> bool {
         c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c)
@@ -37,22 +38,25 @@ fn validate_metadata(metadata: &BTreeMap<String, String>) -> Result<()> {
                 "Invalid metadata key {k:?}"
             )));
         }
-        if !v.is_ascii() {
+        if !v.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
             return Err(Error::InvalidArgument(format!(
-                "Invalid metadata value for key {k:?} (must be US-ASCII)"
+                "Invalid metadata value for key {k:?} (must be printable US-ASCII)"
             )));
         }
     }
     Ok(())
 }
 
+/// Map the `POST /files` REST response entry to the public [`WriteInfo`]. The
+/// REST `type` enum is lowercase `"file"`/`"dir"` (the envd REST schema), NOT the
+/// Connect proto's `FILE_TYPE_*` names.
 fn map_write_info(w: WriteInfoWire) -> WriteInfo {
     WriteInfo {
         name: w.name,
         path: w.path,
         r#type: w.type_.and_then(|t| match t.as_str() {
-            "FILE_TYPE_FILE" => Some(FileType::File),
-            "FILE_TYPE_DIRECTORY" => Some(FileType::Dir),
+            "file" => Some(FileType::File),
+            "dir" | "directory" => Some(FileType::Dir),
             _ => None,
         }),
         metadata: w.metadata.unwrap_or_default().into_iter().collect(),
@@ -97,19 +101,14 @@ impl Filesystem {
         Ok(resp.bytes_stream().map(|chunk| chunk.map_err(Error::from)))
     }
 
-    /// Common write path: validate metadata + build the `X-Metadata-*` headers,
-    /// applying the relevant version gates. `use_octet` is whether THIS request
-    /// will actually use the octet-stream encoding (so the octet gate doesn't
-    /// fire for a multipart write that merely carried a `gzip` flag).
-    fn write_headers(&self, opts: &FsWriteOpts, use_octet: bool) -> Result<Vec<(String, String)>> {
+    /// Common write path: validate metadata + build the `X-Metadata-*` headers.
+    /// Only the metadata feature is gated as an error (envd >= 0.6.2, matching the
+    /// JS SDK's `TemplateError`); octet-stream/gzip support is NOT gated here —
+    /// callers silently fall back to multipart on older envd (see [`Filesystem::write`]).
+    fn write_headers(&self, opts: &FsWriteOpts) -> Result<Vec<(String, String)>> {
         if !opts.metadata.is_empty() && !version_gte(&self.envd_version, ENVD_FILE_METADATA) {
             return Err(Error::Template(format!(
                 "File metadata requires a newer template (envd >= {ENVD_FILE_METADATA})"
-            )));
-        }
-        if use_octet && !version_gte(&self.envd_version, ENVD_OCTET_STREAM_UPLOAD) {
-            return Err(Error::Template(format!(
-                "Octet-stream upload requires a newer template (envd >= {ENVD_OCTET_STREAM_UPLOAD})"
             )));
         }
         validate_metadata(&opts.metadata)?;
@@ -121,16 +120,24 @@ impl Filesystem {
     }
 
     /// Write a single file, returning its [`WriteInfo`].
+    ///
+    /// Uses `application/octet-stream` when `use_octet_stream` is set or `gzip`
+    /// is requested AND the sandbox's envd supports it (>= 0.5.7); otherwise it
+    /// silently falls back to `multipart/form-data` (gzip is dropped), matching
+    /// the JS SDK — it does NOT error on an old template.
     pub async fn write(
         &self,
         path: &str,
         data: impl Into<Vec<u8>>,
         opts: FsWriteOpts,
     ) -> Result<WriteInfo> {
-        let use_octet = opts.use_octet_stream.unwrap_or(opts.gzip);
-        let headers = self.write_headers(&opts, use_octet)?;
+        let headers = self.write_headers(&opts)?;
         let user = self.resolve_user(opts.user.as_deref());
         let data = data.into();
+        // octet-stream when forced or gzip-requested, but only if supported by
+        // this envd; otherwise fall back to multipart (JS does the same).
+        let supports_octet = version_gte(&self.envd_version, ENVD_OCTET_STREAM_UPLOAD);
+        let use_octet = (opts.use_octet_stream.unwrap_or(false) || opts.gzip) && supports_octet;
 
         let infos = if use_octet {
             let (body, encoding) = if opts.gzip {
@@ -176,9 +183,8 @@ impl Filesystem {
         if files.is_empty() {
             return Ok(Vec::new());
         }
-        // Always multipart; `gzip` is ignored here, so the octet-stream gate
-        // must not fire for it.
-        let headers = self.write_headers(&opts, false)?;
+        // Always multipart (`gzip`/`use_octet_stream` do not apply to multi-file).
+        let headers = self.write_headers(&opts)?;
         let user = self.resolve_user(opts.user.as_deref());
         let mut form = reqwest::multipart::Form::new();
         for entry in files {

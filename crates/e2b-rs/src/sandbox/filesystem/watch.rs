@@ -4,7 +4,7 @@ use futures::StreamExt as _;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use super::{Filesystem, FilesystemEvent};
+use super::{Filesystem, FilesystemEvent, file_not_found_on_missing};
 use crate::envd::proto::filesystem as pb;
 use crate::envd::proto::filesystem::watch_dir_response::Event as WatchEvent;
 use crate::envd::versions::{
@@ -102,7 +102,8 @@ impl Filesystem {
                 &req,
                 user.as_deref(),
             )
-            .await?;
+            .await
+            .map_err(|e| file_not_found_on_missing(e, path))?;
 
         let (tx, rx) = mpsc::channel(64);
         let task = tokio::spawn(async move {

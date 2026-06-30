@@ -176,7 +176,7 @@ impl Filesystem {
         {
             Ok(_) => Ok(true),
             Err(Error::Conflict(_)) => Ok(false),
-            Err(e) => Err(e),
+            Err(e) => Err(file_not_found_on_missing(e, path)),
         }
     }
 
@@ -358,7 +358,8 @@ mod tests {
             .and(path("/files"))
             .and(wiremock::matchers::query_param("path", "/w.txt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                { "name": "w.txt", "type": "FILE_TYPE_FILE", "path": "/w.txt", "metadata": {} }
+                // REST /files response: lowercase `type` (NOT the proto FILE_TYPE_*).
+                { "name": "w.txt", "type": "file", "path": "/w.txt", "metadata": {} }
             ])))
             .mount(&server)
             .await;
@@ -367,6 +368,34 @@ mod tests {
             use_octet_stream: Some(true),
             ..Default::default()
         };
+        let info = fs
+            .write("/w.txt", b"hi".to_vec(), opts)
+            .await
+            .expect("write");
+        assert_eq!(info.path, "/w.txt");
+        // The REST `"file"` type must decode to the public FileType::File.
+        assert_eq!(info.r#type, Some(FileType::File));
+    }
+
+    #[tokio::test]
+    async fn write_gzip_on_old_envd_falls_back_to_multipart() {
+        // JS silently downgrades octet/gzip to multipart on envd < 0.5.7 (no error).
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "name": "w.txt", "type": "file", "path": "/w.txt", "metadata": {} }
+            ])))
+            .mount(&server)
+            .await;
+        let config = ConnectionConfig::new(ConnectionConfigOpts::default());
+        let fs = Filesystem::build_with_base_url(server.uri(), "sbx", "0.5.0", None, &config)
+            .expect("fs");
+        let opts = crate::sandbox::filesystem::FsWriteOpts {
+            gzip: true,
+            ..Default::default()
+        };
+        // Must NOT error with Error::Template — falls back to multipart.
         let info = fs
             .write("/w.txt", b"hi".to_vec(), opts)
             .await
@@ -398,7 +427,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/files"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                { "name": "a.txt", "type": "FILE_TYPE_FILE", "path": "/a.txt", "metadata": {} }
+                { "name": "a.txt", "type": "file", "path": "/a.txt", "metadata": {} }
             ])))
             .mount(&server)
             .await;
