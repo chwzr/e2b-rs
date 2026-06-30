@@ -210,6 +210,31 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 - The build pipeline (HTTP build trigger, build-status polling, log streaming), Dockerfile parser, file upload/hashing, and builder methods (`fromImage`, `copy`, `runCmd`, etc.) are Plans 5b–5d (placeholders below).
 - `addMcpServer`, devcontainer-beta (`betaDevContainerPrebuild`/`betaSetDevContainerStart`), and the CLI animated logger are **DEFERRED** (user decision — not planned for initial release).
 
-### 5b–5d — Build pipeline, Dockerfile parser, file upload, builder methods
+### 5b — File context
 
-_Rows added when Plans 5b–5d land._
+All items are `pub(crate)`; they are consumed by the build pipeline (Plan 5c) and
+builder methods (Plan 5d). No public API is introduced in this plan.
+
+| JS (`src/template/...`) | Rust (`e2b_rs::template`) | Status |
+|---|---|---|
+| `buildContext.ts` `validateRelativePath` | `validate_relative_path` | ✅ |
+| `buildContext.ts` `readDockerignore` | `read_dockerignore` (globset patterns) | ✅ |
+| `buildContext.ts` `getAllFilesInPath` | `get_all_files_in_path` (walkdir + `.dockerignore` via globset) | ✅ |
+| `buildContext.ts` (path util) | `relative_posix` (POSIX-normalised relative path) | ✅ |
+| `buildContext.ts` `calculateFilesHash` | `calculate_files_hash` — deterministic build cache key (SHA-256 over `"COPY src dest"` line + per-sorted-file: relative-POSIX path + Unix mode + file size + raw bytes); uid/gid/mtime explicitly excluded | ✅ |
+| `buildContext.ts` `tarFileStream` | `tar_file_stream` — gzip-compressed tar context archive spooled to a `tempfile::SpooledTempFile`; no directory re-recursion | ✅ |
+| `buildContext.ts` `getFileUploadLink` | `get_file_upload_link` (`GET /templates/{id}/files/{hash}`) | ✅ |
+| `buildContext.ts` `uploadFile` | `upload_file` (`PUT` to presigned S3 URL; explicit `Content-Length`; 1-hour timeout; chunked transfer encoding rejected by S3) | ✅ |
+| `dockerfile.ts` (minimal parser) | `parse_dockerfile` — handles FROM/RUN/COPY/ADD/WORKDIR/USER/ENV/ARG; EXPOSE/VOLUME ignored; CMD/ENTRYPOINT → `startCmd`; multi-stage Dockerfiles rejected; applies E2B USER/WORKDIR defaults if absent | ✅ |
+
+**New crate dependencies added at workspace root:** `sha2`, `glob`, `globset`, `walkdir`, `tempfile`, `tar`, `flate2`.
+
+**Notes:**
+- The files-hash is *intra-SDK deterministic* (stable byte sequence within `e2b-rs`). Cross-SDK byte-parity with the JS hash is a **documented stretch goal**, not required — the server stores the build context under whatever hash the client sends, so the only constraint is self-consistency across SDK versions.
+- Here-doc syntax and parser directives in Dockerfiles are not handled (matching the scope of the JS implementation).
+- Non-Unix `mode` fallback (Windows): the mode contribution to the hash uses `0o644` as a default when Unix permissions are unavailable.
+- `.dockerignore` glob semantics use `globset` (gitignore-style) rather than `minimatch`; edge-case behaviour on negation patterns may differ from the JS SDK (tracked carry-forward).
+
+### 5c–5d — Build pipeline, builder methods
+
+_(Plans 5c–5d: build pipeline — HTTP build trigger, build-status polling, log streaming over `tokio::sync::mpsc`; builder methods — `from_image`, `copy`, `run_cmd`, `add_mcp_server` (deferred), etc. Rows added when those plans land.)_
