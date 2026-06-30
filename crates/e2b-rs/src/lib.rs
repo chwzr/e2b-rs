@@ -105,7 +105,7 @@ pub(crate) mod http;
 
 pub(crate) mod envd;
 
-pub(crate) mod volume;
+pub mod volume;
 
 pub(crate) mod api;
 
@@ -144,3 +144,8 @@ pub use sandbox::{
 pub mod paginator;
 
 pub use paginator::PaginationState;
+
+pub use volume::{
+    VolumeAndToken, VolumeEntryStat, VolumeFileType, VolumeInfo, VolumeListOpts, VolumeMakeDirOpts,
+    VolumeMetadataOpts, VolumeReadOpts, VolumeWriteOpts,
+};
