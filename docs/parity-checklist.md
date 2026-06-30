@@ -235,6 +235,29 @@ builder methods (Plan 5d). No public API is introduced in this plan.
 - Non-Unix `mode` fallback (Windows): the mode contribution to the hash uses the string `"0"` as a stable default when Unix permissions are unavailable.
 - `.dockerignore` glob semantics use `globset` (gitignore-style) rather than `minimatch`; edge-case behaviour on negation patterns may differ from the JS SDK (tracked carry-forward).
 
-### 5c–5d — Build pipeline, builder methods
+### 5c — Build pipeline
 
-_(Plans 5c–5d: build pipeline — HTTP build trigger, build-status polling, log streaming over `tokio::sync::mpsc`; builder methods — `from_image`, `copy`, `run_cmd`, `add_mcp_server` (deferred), etc. Rows added when those plans land.)_
+| JS (`src/template/...`) | Rust (`e2b_rs::template`) | Status |
+|---|---|---|
+| `Template` builder (`fromImage`/`fromBaseImage`/`fromTemplate`/`fromDockerfile`/`setStartCmd`/`setReadyCmd`/`skipCache`) | `Template::from_image`/`from_base_image`/`from_template`/`from_dockerfile`/`set_start_cmd`/`set_ready_cmd`/`skip_cache` | ✅ |
+| `template.build(name, opts)` | `Template::build(name, BuildOptions)` → `BuildHandle` (streaming) | ✅ |
+| `template.buildInBackground(name, opts)` | `Template::build_in_background(name, BuildOptions)` → `BuildInfo` (no streaming) | ✅ |
+| `BuildHandle` log streaming | `BuildHandle::next()` → `Option<LogEntry>` (mpsc channel); mirrors `CommandHandle` | ✅ |
+| `BuildHandle` completion | `BuildHandle::wait()` → `Result<BuildInfo>`; drains log channel, then returns outcome | ✅ |
+| 4-phase pipeline: request → upload → trigger → poll | `request_build` → parallel context upload → `trigger_build` → `wait_for_build_finish` (poll-with-drain, 200 ms cadence) | ✅ |
+| `RegistryConfig` (AWS/GCP/generic) | `RegistryConfig::{Aws, Gcp, General}` — serialises to `FromImageRegistry` wire enum internally | ✅ |
+| `assignTags` / `removeTags` / `getTags` | `Template::assign_tags` / `remove_tags` / `get_tags` → `Vec<TemplateTag>` | ✅ |
+| `exists` / `aliasExists` (403 → true) | `Template::exists` / `alias_exists` — 200→`Ok(true)`, 404→`Ok(false)`, 403→`Ok(true)` (matches JS) | ✅ |
+| `getBuildStatus` | `Template::get_build_status` → `TemplateBuildStatusResponse` | ✅ |
+
+**Notes:**
+- `BuildHandle` mirrors `CommandHandle`: `next()` pulls one [`LogEntry`] at a time from the mpsc channel; `wait()` drains and returns the final [`BuildInfo`].
+- `force_upload` on [`Instruction`]/[`CopyItem`] is honoured in the context-upload step (re-uploads even when hash matches cached copy).
+- Build context defaults to the current working directory (`std::env::current_dir()`); a configurable context-path argument is a carry-forward.
+- `logs_refresh_frequency` is fixed at 200 ms per poll; exposing it as a per-build knob is a carry-forward.
+- `error` status from the API → `Err(Error::Build(reason.message))`; the JS `getBuildStepIndex` step-mapping is simplified — only `reason.message` is surfaced (carry-forward).
+- No generated wire type (e.g. `FromImageRegistry`) is exposed in the public API; serialisation happens internally in `RegistryConfig::to_wire`.
+
+### 5d — Builder methods
+
+_(Plan 5d: builder convenience methods — `copy`/`copyItems`/`remove`/`rename`/`makeDir`/`makeSymlink`/`runCmd`/`setWorkdir`/`setUser`/`setEnvs`/`pipInstall`/`npmInstall`/`aptInstall`/`gitClone` + the `from*` image variants. The last sub-plan of the project.)_

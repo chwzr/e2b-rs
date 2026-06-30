@@ -17,17 +17,24 @@
 //! HTTP calls and full build orchestration arrive in later milestones.
 
 pub(crate) mod archive;
+pub(crate) mod build_api;
+pub mod builder;
 pub(crate) mod dockerfile;
 pub(crate) mod files;
+pub mod handle;
 pub mod log;
 pub mod readycmd;
+pub mod tags;
 pub mod types;
 pub(crate) mod upload;
 
+pub use builder::{BuildOptions, RegistryConfig, Template};
+pub use handle::BuildHandle;
 pub use log::{LogEntry, LogEntryLevel};
 pub use readycmd::{
     ReadyCmd, wait_for_file, wait_for_port, wait_for_process, wait_for_timeout, wait_for_url,
 };
+pub use tags::{TemplateApiOpts, TemplateTagInfo};
 pub use types::{
     BuildInfo, BuildStatus, BuildStatusReason, CopyItem, Instruction, InstructionType,
     TemplateBuildStatusResponse, TemplateTag,

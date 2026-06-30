@@ -82,6 +82,23 @@ let text = volume.read_file("/hello.txt").await?;
 println!("{text}");
 ```
 
+Build a custom template from a Docker base image and stream the build logs as
+they arrive:
+
+```rust
+use e2b_rs::{Template, wait_for_timeout};
+
+let template = Template::new()
+    .from_image("node:20")
+    .set_start_cmd("npm start", wait_for_timeout(20_000));
+let mut build = template.build("my-template", Default::default()).await?;
+while let Some(log) = build.next().await {
+    println!("{log}");
+}
+let info = build.wait().await?;
+println!("built template {}", info.template_id);
+```
+
 Control-plane extras are also available: pause/resume, metrics, snapshots
 (create/list/delete), network-rule updates, and signed upload/download URLs.
 
