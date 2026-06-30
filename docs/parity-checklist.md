@@ -286,7 +286,7 @@ builder methods (Plan 5d). No public API is introduced in this plan.
 | `copy(src, dest, opts)` | `copy(src, dest, CopyOpts)` → `Result<Template>` | Validates relative path; args = `[src, dest, user, mode_octal]` | ✅ |
 | `copyItems(items)` | `copy_items(Vec<CopyItem>)` → `Result<Template>` | Per-item relative-path validation | ✅ |
 | `remove(paths, opts)` | `remove(&[&str], RemoveOpts)` → `Template` | Builds `rm [-r] [-f] <quoted-paths>` | ✅ |
-| `rename(src, dest, opts)` | `rename(src, dest, RenameOpts)` → `Template` | Builds `mv [-f] <src> <dest>` | ✅ |
+| `rename(src, dest, opts)` | `rename(src, dest, RenameOpts)` → `Template` | Builds `mv <src> <dest> [-f]` | ✅ |
 | `makeDir(paths, opts)` | `make_dir(&[&str], MakeDirOpts)` → `Template` | Builds `mkdir -p [-m <mode>] <paths>` | ✅ |
 | `makeSymlink(src, dest, opts)` | `make_symlink(src, dest, MakeSymlinkOpts)` → `Template` | Builds `ln -s [-f] <src> <dest>` | ✅ |
 | `runCmd(command, opts)` | `run_cmd(command, RunCmdOpts)` → `Template` | Single `RUN` instruction | ✅ |
@@ -307,4 +307,4 @@ builder methods (Plan 5d). No public API is introduced in this plan.
 - `set_envs` orders keys ascending via `BTreeMap` iteration rather than JS insertion order — this is a documented carry-forward for determinism.
 - Per-layer `forceNextLayer` in the JS SDK is simplified to a template-level `force` flag (`skip_cache()`) in `e2b-rs` — carry-forward.
 - `template::GitCloneOpts` lives at `e2b_rs::template::GitCloneOpts`; the crate root `e2b_rs::GitCloneOpts` re-exports the sandbox git one to avoid naming conflict.
-- All new opt structs (`CopyOpts`, `RemoveOpts`, `RenameOpts`, `MakeDirOpts`, `MakeSymlinkOpts`, `RunCmdOpts`, `PipInstallOpts`, `NpmInstallOpts`, `BunInstallOpts`, `AptInstallOpts`, `GitCloneOpts`) are re-exported at the crate root.
+- All new opt structs (`CopyOpts`, `RemoveOpts`, `RenameOpts`, `MakeDirOpts`, `MakeSymlinkOpts`, `RunCmdOpts`, `PipInstallOpts`, `NpmInstallOpts`, `BunInstallOpts`, `AptInstallOpts`) are re-exported at the crate root — EXCEPT `GitCloneOpts`, which is reachable only via `e2b_rs::template::GitCloneOpts` (the crate-root `e2b_rs::GitCloneOpts` is the sandbox-git one).
