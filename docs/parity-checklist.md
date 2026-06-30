@@ -139,6 +139,8 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 | `configureUser(name, email, opts)` | `Git::configure_user(name, email, GitConfigOpts)` → `Ok(CommandResult)` | ✅ |
 | `dangerouslyAuthenticate(opts)` | `Git::dangerously_authenticate(GitDangerouslyAuthenticateOpts)` → `Ok(CommandResult)` | ✅ |
 
+> **Note:** git method opt structs expose only `user` (plus method-specific flags); per-operation `envs` / `cwd` / `timeout` passthrough from JS `GitRequestOpts` is NOT exposed, and git always runs with `GIT_TERMINAL_PROMPT=0`. (Tracked follow-up, not a ✅-blocker.)
+
 > **Exit-code convention:** Non-zero git exit returns `Ok(CommandResult)` (exit code in `result.exit_code`) for all methods **except**:
 > - `clone`: auth failure → `Err(GitAuth)`.
 > - `push`/`pull` (non-credentialed path): auth failure → `Err(GitAuth)`, missing upstream → `Err(GitUpstream)`.

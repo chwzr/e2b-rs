@@ -572,10 +572,12 @@ impl Git {
         }
 
         // Exit 0 + strip_inline: reset origin to the sanitized URL.
+        // check_set_url_exit promotes a non-zero exit to Err so credentials are
+        // never silently left in .git/config when the strip command fails.
         if strip_inline && let Some(ref rp) = repo_path {
             let set_url_cmd =
                 build_git_command(&["remote", "set-url", "origin", &sanitized], Some(rp));
-            self.run_cmd(&set_url_cmd, user).await?;
+            check_set_url_exit(self.run_cmd(&set_url_cmd, user).await?)?;
         }
 
         Ok(result)
@@ -949,6 +951,11 @@ impl Git {
         value: &str,
         opts: GitConfigOpts,
     ) -> Result<CommandResult> {
+        if key.is_empty() {
+            return Err(Error::InvalidArgument(
+                "Git config key is required.".to_string(),
+            ));
+        }
         let scope = opts.scope.unwrap_or(GitConfigScope::Global);
         let flag = scope_flag(scope);
         let repo_path = repo_path_for_scope(scope, opts.path.as_deref())?;
@@ -961,6 +968,11 @@ impl Git {
     /// Equivalent to:
     /// `git [-C <path>] config [--global|--local|--system] --get <key> || true`
     pub async fn get_config(&self, key: &str, opts: GitConfigOpts) -> Result<Option<String>> {
+        if key.is_empty() {
+            return Err(Error::InvalidArgument(
+                "Git config key is required.".to_string(),
+            ));
+        }
         let scope = opts.scope.unwrap_or(GitConfigScope::Global);
         let flag = scope_flag(scope);
         let repo_path = repo_path_for_scope(scope, opts.path.as_deref())?;
@@ -987,6 +999,11 @@ impl Git {
         email: &str,
         opts: GitConfigOpts,
     ) -> Result<CommandResult> {
+        if name.is_empty() || email.is_empty() {
+            return Err(Error::InvalidArgument(
+                "Both name and email are required.".to_string(),
+            ));
+        }
         let scope = opts.scope.unwrap_or(GitConfigScope::Global);
         let flag = scope_flag(scope);
         let repo_path = repo_path_for_scope(scope, opts.path.as_deref())?;
@@ -1013,6 +1030,11 @@ impl Git {
         url: &str,
         opts: GitRemoteAddOpts,
     ) -> Result<CommandResult> {
+        if name.is_empty() || url.is_empty() {
+            return Err(Error::InvalidArgument(
+                "Both remote name and URL are required to add a git remote.".to_string(),
+            ));
+        }
         let mut add_args: Vec<String> = vec!["remote".to_string(), "add".to_string()];
         if opts.fetch {
             add_args.push("-f".to_string());
@@ -1050,6 +1072,11 @@ impl Git {
         name: &str,
         opts: GitRequestOpts,
     ) -> Result<Option<String>> {
+        if name.is_empty() {
+            return Err(Error::InvalidArgument(
+                "Remote name is required.".to_string(),
+            ));
+        }
         let git_cmd = build_git_command(&["remote", "get-url", name], Some(path));
         let cmd = format!("{git_cmd} || true");
         let result = self.run_cmd(&cmd, opts.user).await?;
@@ -1741,5 +1768,108 @@ mod tests {
             .await
             .expect("dangerously_authenticate ok");
         assert_eq!(result.exit_code, 0);
+        // Both `git config` (credential.helper) and `git credential approve` must fire.
+        assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 5 fixes
+    // -----------------------------------------------------------------------
+
+    /// `git clone` with credentials and `dangerously_store_credentials=false` must
+    /// fire TWO RPCs: the clone itself and the post-clone `git remote set-url origin`
+    /// credential-strip.  The strip's exit is checked via `check_set_url_exit`.
+    #[tokio::test]
+    async fn clone_strips_credentials_fires_two_rpcs() {
+        let server = MockServer::start().await;
+        // One mount responds to both the clone RPC and the set-url RPC.
+        mount_proc(&server, 0).await;
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+        let result = git
+            .clone(
+                "https://github.com/private/repo.git",
+                GitCloneOpts {
+                    username: Some("u".to_string()),
+                    password: Some("p".to_string()),
+                    path: Some("/dest".to_string()),
+                    dangerously_store_credentials: false,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("clone with credential strip ok");
+        assert_eq!(result.exit_code, 0);
+        // Clone RPC + set-url strip RPC = 2 requests.
+        assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+    }
+
+    /// Empty-string guards on config/remote methods fire before any network I/O.
+    ///
+    /// Covers: `set_config(key)`, `get_config(key)`, `remote_add(name, url)`,
+    /// `remote_get(name)`, `configure_user(name, email)`.
+    #[tokio::test]
+    async fn empty_string_guards_return_invalid_argument() {
+        // Use a real mock server but assert it receives zero requests.
+        let server = MockServer::start().await;
+        let git = Git::new(Commands::build_with_connect(connect_for(&server), "0.6.3"));
+
+        // set_config: empty key
+        let err = git
+            .set_config("", "v", GitConfigOpts::default())
+            .await
+            .expect_err("empty key");
+        assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+        // get_config: empty key
+        let err = git
+            .get_config("", GitConfigOpts::default())
+            .await
+            .expect_err("empty key");
+        assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+        // remote_add: empty name
+        let err = git
+            .remote_add("/r", "", "https://h/r.git", GitRemoteAddOpts::default())
+            .await
+            .expect_err("empty name");
+        assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+        // remote_add: empty url
+        let err = git
+            .remote_add("/r", "origin", "", GitRemoteAddOpts::default())
+            .await
+            .expect_err("empty url");
+        assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+        // remote_get: empty name
+        let err = git
+            .remote_get("/r", "", GitRequestOpts::default())
+            .await
+            .expect_err("empty name");
+        assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+        // configure_user: empty name
+        let err = git
+            .configure_user("", "a@b.com", GitConfigOpts::default())
+            .await
+            .expect_err("empty name");
+        assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+        // configure_user: empty email
+        let err = git
+            .configure_user("Alice", "", GitConfigOpts::default())
+            .await
+            .expect_err("empty email");
+        assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+        // All guards fire before any network round-trip.
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty(),
+            "all guards must fire before any network round-trip"
+        );
     }
 }
