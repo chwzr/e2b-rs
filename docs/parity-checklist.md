@@ -94,6 +94,27 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 | `makeDir` / `remove` / `rename` | `make_dir` / `remove` / `rename` | ✅ |
 | `watchDir` (+ WatchHandle) | `watch_dir` → `WatchHandle` (mpsc) | ✅ |
 
+## Sandbox commands & pty (Plan 3c)
+
+| JS (`sandbox.commands.*` / `sandbox.pty.*`) | Rust (`sandbox.commands().*` / `sandbox.pty().*`) | Status |
+|---|---|---|
+| `commands.run` (foreground, waits for exit) | `Commands::run` → `Ok(CommandResult)` (non-zero exit is **data**, not an error; JS throws on non-zero) | ✅ |
+| `commands.run` (background / streaming) | `Commands::start` → `CommandHandle` (live output via `next`; result via `wait`) | ✅ |
+| `commands.list` | `Commands::list` → `Vec<ProcessInfo>` | ✅ |
+| `commands.kill(pid)` | `Commands::kill(pid)` → `bool` (`false` = not found) | ✅ |
+| `commands.sendStdin(pid, data)` | `Commands::send_stdin(pid, data)` | ✅ |
+| `commands.closeStdin(pid)` | `Commands::close_stdin(pid)` (version-gated: envd >= `ENVD_ENVD_CLOSE`) | ✅ |
+| `commands.connect(pid)` | `Commands::connect(pid, user)` → `CommandHandle` | ✅ |
+| `pty.create(size, opts)` | `Pty::create(size, opts)` → `CommandHandle` (output as `CommandOutput::Pty`) | ✅ |
+| `pty.sendInput(pid, data)` | `Pty::send_input(pid, data)` | ✅ |
+| `pty.resize(pid, size)` | `Pty::resize(pid, size)` | ✅ |
+| `pty.kill(pid)` | `Pty::kill(pid)` → `bool` (`false` = not found) | ✅ |
+| `pty.connect(pid)` | `Pty::connect(pid, user)` → `CommandHandle` | ✅ |
+
+> **Divergence — non-zero exit:** The JS SDK throws `CommandExitError` when a command exits with a non-zero code; `e2b-rs` returns `Ok(CommandResult)` with the exit code in `result.exit_code`. Callers must check `exit_code` themselves.
+>
+> **Carry-forwards (out of scope):** `StreamInput` client-streaming RPC (unused by JS); tag-based process selection (only pid used); per-stream `connect-timeout-ms` / `KEEPALIVE_PING_HEADER` on long-lived streams (Plan 2b carry-forward); deduplicating the `ConnectClient` across `Filesystem`/`Commands`/`Pty` (currently one client per subsystem).
+
 ## Sandbox & I/O (Plan 3, remaining) · Git & Volume (Plan 4) · Template (Plan 5)
 
 _Rows added as each milestone lands._
