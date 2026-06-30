@@ -111,6 +111,27 @@ pub(crate) async fn get_sandbox_info(
     api.request(reqwest::Method::GET, &path, &[], None).await
 }
 
+/// Pause a sandbox. `keep_memory` controls whether a full memory snapshot is
+/// taken (warm resume) vs filesystem-only. Returns `false` if the sandbox is
+/// already paused (HTTP 409, idempotent), matching the JS SDK.
+pub(crate) async fn pause_sandbox(
+    api: &ApiClient,
+    sandbox_id: &str,
+    keep_memory: bool,
+) -> Result<bool> {
+    let body = serde_json::json!({ "memory": keep_memory });
+    let path = format!("/sandboxes/{sandbox_id}/pause");
+    match api
+        .request_unit(reqwest::Method::POST, &path, &[], Some(&body))
+        .await
+    {
+        Ok(()) => Ok(true),
+        // 409 = already paused; idempotent, not an error.
+        Err(Error::Conflict(_)) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// Set the sandbox timeout (from now).
 pub(crate) async fn set_sandbox_timeout(
     api: &ApiClient,
@@ -243,6 +264,37 @@ mod tests {
             kill_sandbox(&api_for(&server), "sbx_ok")
                 .await
                 .expect("kill")
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_returns_true_on_204() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sandboxes/sbx_p/pause"))
+            .and(body_partial_json(serde_json::json!({ "memory": true })))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        assert!(
+            pause_sandbox(&api_for(&server), "sbx_p", true)
+                .await
+                .expect("pause")
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_returns_false_when_already_paused_409() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sandboxes/sbx_p/pause"))
+            .respond_with(ResponseTemplate::new(409))
+            .mount(&server)
+            .await;
+        assert!(
+            !pause_sandbox(&api_for(&server), "sbx_p", true)
+                .await
+                .expect("pause idempotent")
         );
     }
 }

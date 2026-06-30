@@ -48,6 +48,10 @@ pub enum Error {
     /// The API rate limit was exceeded (JS `RateLimitError`).
     #[error("{0}")]
     RateLimit(String),
+    /// The request conflicts with the resource's current state (HTTP 409),
+    /// e.g. pausing an already-paused sandbox or updating a paused sandbox.
+    #[error("{0}")]
+    Conflict(String),
     /// A template build failed (JS `BuildError`).
     #[error("{0}")]
     Build(String),
@@ -98,6 +102,7 @@ impl Error {
             400 => Error::InvalidArgument(message),
             401 => Error::Authentication(message),
             404 => Error::NotFound(message),
+            409 => Error::Conflict(message),
             429 => Error::RateLimit(message),
             502 => format_sandbox_timeout_error(message),
             507 => Error::NotEnoughSpace(message),
@@ -139,6 +144,7 @@ mod tests {
             Error::Authentication(_)
         ));
         assert!(matches!(Error::from_status(404, "x"), Error::NotFound(_)));
+        assert!(matches!(Error::from_status(409, "x"), Error::Conflict(_)));
         assert!(matches!(Error::from_status(429, "x"), Error::RateLimit(_)));
         assert!(matches!(
             Error::from_status(507, "x"),

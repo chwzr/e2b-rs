@@ -91,6 +91,13 @@ impl Sandbox {
         api::set_sandbox_timeout(&self.api, &self.sandbox_id, timeout).await
     }
 
+    /// Pause the sandbox, returning `false` if it was already paused.
+    ///
+    /// Takes a full memory snapshot so a later [`Sandbox::connect`] warm-boots.
+    pub async fn pause(&self) -> Result<bool> {
+        api::pause_sandbox(&self.api, &self.sandbox_id, true).await
+    }
+
     /// Whether the sandbox is currently running (control-plane state).
     ///
     /// Note: Plan 3b refines this to the envd `/health` probe; for now it
