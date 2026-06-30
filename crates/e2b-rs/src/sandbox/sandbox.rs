@@ -43,8 +43,12 @@ pub struct Sandbox {
     pub(crate) config: ConnectionConfig,
     /// Control-plane API client.
     pub(crate) api: ApiClient,
-    /// Filesystem operations (sandbox.files).
+    /// Filesystem operations (`sandbox.files()`).
     pub(crate) files: crate::sandbox::filesystem::Filesystem,
+    /// Command execution (`sandbox.commands()`).
+    pub(crate) commands: crate::sandbox::commands::Commands,
+    /// Pseudo-terminal sessions (`sandbox.pty()`).
+    pub(crate) pty: crate::sandbox::pty::Pty,
 }
 
 impl Sandbox {
@@ -275,6 +279,20 @@ impl Sandbox {
             s.envd_access_token.as_deref(),
             &config,
         )?;
+        let commands = crate::sandbox::commands::Commands::build(
+            &s.sandbox_id,
+            &domain,
+            &s.envd_version.0,
+            s.envd_access_token.as_deref(),
+            &config,
+        )?;
+        let pty = crate::sandbox::pty::Pty::build(
+            &s.sandbox_id,
+            &domain,
+            &s.envd_version.0,
+            s.envd_access_token.as_deref(),
+            &config,
+        )?;
         Ok(Sandbox {
             sandbox_id: s.sandbox_id,
             sandbox_domain,
@@ -283,12 +301,24 @@ impl Sandbox {
             config,
             api,
             files,
+            commands,
+            pty,
         })
     }
 
     /// Access the sandbox filesystem (`read`/`write`/`list`/`watch`/...).
     pub fn files(&self) -> &crate::sandbox::filesystem::Filesystem {
         &self.files
+    }
+
+    /// Access sandbox command execution (`run`/`start`/...).
+    pub fn commands(&self) -> &crate::sandbox::commands::Commands {
+        &self.commands
+    }
+
+    /// Access sandbox pseudo-terminal sessions (`create`/`resize`/...).
+    pub fn pty(&self) -> &crate::sandbox::pty::Pty {
+        &self.pty
     }
 }
 
@@ -454,6 +484,11 @@ mod tests {
             "sbx_u", "e2b.app", "0.6.0", token, &config,
         )
         .expect("files");
+        let commands =
+            crate::sandbox::commands::Commands::build("sbx_u", "e2b.app", "0.6.0", token, &config)
+                .expect("commands");
+        let pty = crate::sandbox::pty::Pty::build("sbx_u", "e2b.app", "0.6.0", token, &config)
+            .expect("pty");
         Sandbox {
             sandbox_id: "sbx_u".to_string(),
             sandbox_domain: Some("e2b.app".to_string()),
@@ -462,6 +497,8 @@ mod tests {
             config,
             api,
             files,
+            commands,
+            pty,
         }
     }
 

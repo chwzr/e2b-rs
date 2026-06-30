@@ -54,6 +54,26 @@
 //! # }
 //! ```
 //!
+//! ## Commands & PTY
+//!
+//! ```no_run
+//! # async fn run() -> e2b_rs::Result<()> {
+//! use e2b_rs::Sandbox;
+//! let sandbox = Sandbox::create().template("base").await?;
+//! let result = sandbox.commands().run("echo hello", Default::default()).await?;
+//! println!("exit {}: {}", result.exit_code, result.stdout);
+//!
+//! let mut cmd = sandbox.commands().start("sleep 1; echo done", Default::default()).await?;
+//! while let Some(out) = cmd.next().await {
+//!     if let e2b_rs::CommandOutput::Stdout(bytes) = out {
+//!         print!("{}", String::from_utf8_lossy(&bytes));
+//!     }
+//! }
+//! let _ = cmd.wait().await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Resolving configuration
 //!
 //! ```
@@ -96,11 +116,12 @@ pub mod sandbox;
 
 pub use sandbox::signature::{Signature, SignatureOperation, get_signature, get_signature_now};
 pub use sandbox::{
-    EntryInfo, FileType, Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts,
-    NetworkRule, Sandbox, SandboxConnectBuilder, SandboxConnectOpts, SandboxCreateBuilder,
-    SandboxCreateOpts, SandboxInfo, SandboxListOpts, SandboxMetrics, SandboxNetworkUpdate,
-    SandboxPaginator, SandboxState, SandboxUrlOpts, SnapshotInfo, SnapshotListOpts,
-    SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry, WriteInfo,
+    CommandHandle, CommandOutput, CommandResult, CommandStartOpts, Commands, EntryInfo, FileType,
+    Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts, NetworkRule, ProcessInfo, Pty,
+    PtyCreateOpts, PtySize, Sandbox, SandboxConnectBuilder, SandboxConnectOpts,
+    SandboxCreateBuilder, SandboxCreateOpts, SandboxInfo, SandboxListOpts, SandboxMetrics,
+    SandboxNetworkUpdate, SandboxPaginator, SandboxState, SandboxUrlOpts, SnapshotInfo,
+    SnapshotListOpts, SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry, WriteInfo,
 };
 
 pub mod paginator;

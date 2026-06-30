@@ -39,6 +39,26 @@ while let Some(event) = watch.next().await {
 }
 ```
 
+Run commands inside the sandbox and stream their output:
+
+```rust
+use e2b_rs::{CommandOutput, Sandbox};
+
+let sandbox = Sandbox::create().template("base").await?;
+// Foreground: run to completion.
+let result = sandbox.commands().run("echo hello", Default::default()).await?;
+println!("exit {}: {}", result.exit_code, result.stdout);
+
+// Background: stream output as it arrives.
+let mut cmd = sandbox.commands().start("sleep 1; echo done", Default::default()).await?;
+while let Some(out) = cmd.next().await {
+    if let CommandOutput::Stdout(bytes) = out {
+        print!("{}", String::from_utf8_lossy(&bytes));
+    }
+}
+let _ = cmd.wait().await?;
+```
+
 Control-plane extras are also available: pause/resume, metrics, snapshots
 (create/list/delete), network-rule updates, and signed upload/download URLs.
 
