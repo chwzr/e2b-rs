@@ -29,8 +29,9 @@ pub mod types;
 pub(crate) mod upload;
 
 pub use builder::{
-    BuildOptions, CopyOpts, MakeDirOpts, MakeSymlinkOpts, RegistryConfig, RemoveOpts, RenameOpts,
-    Template,
+    AptInstallOpts, BuildOptions, BunInstallOpts, CopyOpts, GitCloneOpts, MakeDirOpts,
+    MakeSymlinkOpts, NpmInstallOpts, PipInstallOpts, RegistryConfig, RemoveOpts, RenameOpts,
+    RunCmdOpts, Template,
 };
 pub use handle::BuildHandle;
 pub use log::{LogEntry, LogEntryLevel};

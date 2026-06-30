@@ -264,6 +264,132 @@ pub struct MakeSymlinkOpts {
     pub user: Option<String>,
 }
 
+/// Options for the [`Template::run_cmd`] and [`Template::run_cmds`] builder
+/// methods.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, RunCmdOpts};
+///
+/// let t = Template::new()
+///     .run_cmd("echo hello", RunCmdOpts { user: Some("root".to_string()) });
+/// ```
+#[derive(Default, Clone)]
+pub struct RunCmdOpts {
+    /// Run the command as this user inside the build sandbox.
+    pub user: Option<String>,
+}
+
+/// Options for the [`Template::pip_install`] builder method.
+///
+/// Note: `global` defaults to `true` (matching the JS SDK's `g ?? true`).
+/// Use an explicit `PipInstallOpts { global: false }` for user-level installs.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, PipInstallOpts};
+///
+/// // Global install (root, default):
+/// let t = Template::new().pip_install(&["requests"], PipInstallOpts::default());
+///
+/// // Per-user install:
+/// let t = Template::new()
+///     .pip_install(&["requests"], PipInstallOpts { global: false });
+/// ```
+#[derive(Clone)]
+pub struct PipInstallOpts {
+    /// If `true` (the default), run as root and install packages globally.
+    /// If `false`, pass `--user` to `pip install` and run without a user override.
+    pub global: bool,
+}
+
+impl Default for PipInstallOpts {
+    fn default() -> Self {
+        Self { global: true }
+    }
+}
+
+/// Options for the [`Template::npm_install`] builder method.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, NpmInstallOpts};
+///
+/// let t = Template::new()
+///     .npm_install(&["typescript"], NpmInstallOpts { global: true, dev: false });
+/// ```
+#[derive(Default, Clone)]
+pub struct NpmInstallOpts {
+    /// If `true`, pass `-g` to install packages globally (runs as root).
+    pub global: bool,
+    /// If `true`, pass `--save-dev` to install as a development dependency.
+    pub dev: bool,
+}
+
+/// Options for the [`Template::bun_install`] builder method.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, BunInstallOpts};
+///
+/// let t = Template::new()
+///     .bun_install(&["elysia"], BunInstallOpts { global: false, dev: false });
+/// ```
+#[derive(Default, Clone)]
+pub struct BunInstallOpts {
+    /// If `true`, pass `-g` to install packages globally (runs as root).
+    pub global: bool,
+    /// If `true`, pass `--dev` to install as a development dependency.
+    pub dev: bool,
+}
+
+/// Options for the [`Template::apt_install`] builder method.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, AptInstallOpts};
+///
+/// let t = Template::new().apt_install(
+///     &["curl", "git"],
+///     AptInstallOpts { no_install_recommends: true, fix_missing: false },
+/// );
+/// ```
+#[derive(Default, Clone)]
+pub struct AptInstallOpts {
+    /// If `true`, pass `--no-install-recommends` to `apt-get install`.
+    pub no_install_recommends: bool,
+    /// If `true`, pass `--fix-missing` to `apt-get install`.
+    pub fix_missing: bool,
+}
+
+/// Options for the [`Template::git_clone`] builder method.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, GitCloneOpts};
+///
+/// let t = Template::new().git_clone(
+///     "https://github.com/owner/repo.git",
+///     Some("/opt/repo"),
+///     GitCloneOpts { branch: Some("main".to_string()), depth: Some(1), user: None },
+/// );
+/// ```
+#[derive(Default, Clone)]
+pub struct GitCloneOpts {
+    /// Branch to clone. When set, appends `--branch <branch> --single-branch`.
+    pub branch: Option<String>,
+    /// Shallow-clone depth. When set, appends `--depth <depth>`.
+    pub depth: Option<u32>,
+    /// Run the clone command as this user inside the build sandbox.
+    pub user: Option<String>,
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Template
 // ──────────────────────────────────────────────────────────────────────────────
@@ -900,6 +1026,314 @@ impl Template {
         }
         parts.push(crate::utils::shell_quote(src));
         parts.push(crate::utils::shell_quote(dest));
+        let cmd = parts.join(" ");
+        self.push_run(cmd, opts.user);
+        self
+    }
+
+    // ── Command / env / package-installer / git-clone builder methods ─────────
+
+    /// Run a single shell command inside the build sandbox.
+    ///
+    /// Appends a `RUN <command>` instruction. Use [`Template::run_cmds`] to
+    /// join multiple commands with `&&` in a single layer.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, RunCmdOpts};
+    ///
+    /// let t = Template::new()
+    ///     .run_cmd("npm install", RunCmdOpts::default());
+    /// ```
+    pub fn run_cmd(mut self, command: &str, opts: RunCmdOpts) -> Self {
+        self.push_run(command.to_string(), opts.user);
+        self
+    }
+
+    /// Run multiple shell commands inside the build sandbox, joined with `&&`.
+    ///
+    /// Equivalent to `run_cmd(commands.join(" && "), opts)`. All commands run
+    /// in a single image layer.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, RunCmdOpts};
+    ///
+    /// let t = Template::new()
+    ///     .run_cmds(&["apt-get update", "apt-get install -y curl"], RunCmdOpts::default());
+    /// ```
+    pub fn run_cmds(mut self, commands: &[&str], opts: RunCmdOpts) -> Self {
+        self.push_run(commands.join(" && "), opts.user);
+        self
+    }
+
+    /// Set the working directory for subsequent build instructions.
+    ///
+    /// Appends a `WORKDIR <path>` instruction. Port of `setWorkdir` in the JS
+    /// SDK (line 728).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    ///
+    /// let t = Template::new().set_workdir("/app");
+    /// ```
+    pub fn set_workdir(mut self, path: &str) -> Self {
+        self.instructions.push(crate::template::types::Instruction {
+            instruction_type: crate::template::types::InstructionType::Workdir,
+            args: vec![path.to_string()],
+            force: self.force,
+            force_upload: None,
+            files_hash: None,
+            resolve_symlinks: false,
+        });
+        self
+    }
+
+    /// Set the user for subsequent build instructions.
+    ///
+    /// Appends a `USER <user>` instruction. Port of `setUser` in the JS SDK
+    /// (line 739).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    ///
+    /// let t = Template::new().set_user("appuser");
+    /// ```
+    pub fn set_user(mut self, user: &str) -> Self {
+        self.instructions.push(crate::template::types::Instruction {
+            instruction_type: crate::template::types::InstructionType::User,
+            args: vec![user.to_string()],
+            force: self.force,
+            force_upload: None,
+            files_hash: None,
+            resolve_symlinks: false,
+        });
+        self
+    }
+
+    /// Set one or more environment variables in the template image.
+    ///
+    /// Appends an `ENV k1 v1 k2 v2 …` instruction with keys and values
+    /// interleaved in [`std::collections::BTreeMap`] iteration order (sorted
+    /// ascending by key). If `envs` is empty the method returns `self`
+    /// unchanged. Port of `setEnvs` in the JS SDK (line 915).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::collections::BTreeMap;
+    /// use e2b_rs::template::Template;
+    ///
+    /// let mut envs = BTreeMap::new();
+    /// envs.insert("PORT".to_string(), "3000".to_string());
+    /// envs.insert("NODE_ENV".to_string(), "production".to_string());
+    /// let t = Template::new().set_envs(envs);
+    /// ```
+    pub fn set_envs(mut self, envs: std::collections::BTreeMap<String, String>) -> Self {
+        if envs.is_empty() {
+            return self;
+        }
+        let args: Vec<String> = envs.into_iter().flat_map(|(k, v)| [k, v]).collect();
+        self.instructions.push(crate::template::types::Instruction {
+            instruction_type: crate::template::types::InstructionType::Env,
+            args,
+            force: self.force,
+            force_upload: None,
+            files_hash: None,
+            resolve_symlinks: false,
+        });
+        self
+    }
+
+    /// Install Python packages with `pip install`.
+    ///
+    /// When `packages` is empty, installs from the current directory (`.`).
+    /// When `opts.global` is `true` (the default), runs as root and installs
+    /// globally; when `false`, passes `--user` and runs without a user
+    /// override. Port of `pipInstall` in the JS SDK (line 750).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, PipInstallOpts};
+    ///
+    /// // Global install (default):
+    /// let t = Template::new().pip_install(&["requests"], PipInstallOpts::default());
+    ///
+    /// // User-local install:
+    /// let t = Template::new()
+    ///     .pip_install(&["requests"], PipInstallOpts { global: false });
+    /// ```
+    pub fn pip_install(mut self, packages: &[&str], opts: PipInstallOpts) -> Self {
+        let mut parts = vec!["pip".to_string(), "install".to_string()];
+        if !opts.global {
+            parts.push("--user".to_string());
+        }
+        if packages.is_empty() {
+            parts.push(".".to_string());
+        } else {
+            for p in packages {
+                parts.push(p.to_string());
+            }
+        }
+        let cmd = parts.join(" ");
+        let user = if opts.global {
+            Some("root".to_string())
+        } else {
+            None
+        };
+        self.push_run(cmd, user);
+        self
+    }
+
+    /// Install Node.js packages with `npm install`.
+    ///
+    /// Passes `-g` when `opts.global` is `true` (also runs as root) and
+    /// `--save-dev` when `opts.dev` is `true`. Port of `npmInstall` in the JS
+    /// SDK (line 778).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, NpmInstallOpts};
+    ///
+    /// let t = Template::new()
+    ///     .npm_install(&["typescript"], NpmInstallOpts { global: true, dev: false });
+    /// ```
+    pub fn npm_install(mut self, packages: &[&str], opts: NpmInstallOpts) -> Self {
+        let mut parts = vec!["npm".to_string(), "install".to_string()];
+        if opts.global {
+            parts.push("-g".to_string());
+        }
+        if opts.dev {
+            parts.push("--save-dev".to_string());
+        }
+        for p in packages {
+            parts.push(p.to_string());
+        }
+        let cmd = parts.join(" ");
+        let user = if opts.global {
+            Some("root".to_string())
+        } else {
+            None
+        };
+        self.push_run(cmd, user);
+        self
+    }
+
+    /// Install packages with `bun install`.
+    ///
+    /// Passes `-g` when `opts.global` is `true` (also runs as root via
+    /// `user: "root"`) and `--dev` when `opts.dev` is `true`. Port of
+    /// `bunInstall` in the JS SDK (line 805).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, BunInstallOpts};
+    ///
+    /// let t = Template::new()
+    ///     .bun_install(&["elysia"], BunInstallOpts { global: false, dev: false });
+    /// ```
+    pub fn bun_install(mut self, packages: &[&str], opts: BunInstallOpts) -> Self {
+        let mut parts = vec!["bun".to_string(), "install".to_string()];
+        if opts.global {
+            parts.push("-g".to_string());
+        }
+        if opts.dev {
+            parts.push("--dev".to_string());
+        }
+        for p in packages {
+            parts.push(p.to_string());
+        }
+        let cmd = parts.join(" ");
+        let user = if opts.global {
+            Some("root".to_string())
+        } else {
+            None
+        };
+        self.push_run(cmd, user);
+        self
+    }
+
+    /// Install system packages with `apt-get`.
+    ///
+    /// Runs as root and appends a two-command `RUN` instruction:
+    /// `apt-get update && DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes
+    /// apt-get install -y [--no-install-recommends] [--fix-missing] <packages>`.
+    /// Port of `aptInstall` in the JS SDK (line 832).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, AptInstallOpts};
+    ///
+    /// let t = Template::new().apt_install(
+    ///     &["curl", "git"],
+    ///     AptInstallOpts { no_install_recommends: true, ..Default::default() },
+    /// );
+    /// ```
+    pub fn apt_install(mut self, packages: &[&str], opts: AptInstallOpts) -> Self {
+        let install_cmd = format!(
+            "DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y {}{}{}",
+            if opts.no_install_recommends {
+                "--no-install-recommends "
+            } else {
+                ""
+            },
+            if opts.fix_missing {
+                "--fix-missing "
+            } else {
+                ""
+            },
+            packages.join(" ")
+        );
+        let cmd = format!("apt-get update && {install_cmd}");
+        self.push_run(cmd, Some("root".to_string()));
+        self
+    }
+
+    /// Clone a Git repository into the template image.
+    ///
+    /// Builds a `git clone <url> [--branch <branch> --single-branch]
+    /// [--depth <depth>] [<path>]` command and appends it as a `RUN`
+    /// instruction. The `url`, `branch`, and `path` arguments are
+    /// shell-quoted (empty becomes `''`; strings with special characters are
+    /// single-quoted). Port of `gitClone` in the JS SDK (line 866).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, GitCloneOpts};
+    ///
+    /// let t = Template::new().git_clone(
+    ///     "https://github.com/owner/repo.git",
+    ///     Some("/opt/repo"),
+    ///     GitCloneOpts { branch: Some("main".to_string()), depth: Some(1), user: None },
+    /// );
+    /// ```
+    pub fn git_clone(mut self, url: &str, path: Option<&str>, opts: GitCloneOpts) -> Self {
+        let mut parts = vec![
+            "git".to_string(),
+            "clone".to_string(),
+            crate::utils::shell_quote(url),
+        ];
+        if let Some(branch) = &opts.branch {
+            parts.push(format!("--branch {}", crate::utils::shell_quote(branch)));
+            parts.push("--single-branch".to_string());
+        }
+        if let Some(depth) = opts.depth {
+            parts.push(format!("--depth {depth}"));
+        }
+        if let Some(p) = path {
+            parts.push(crate::utils::shell_quote(p));
+        }
         let cmd = parts.join(" ");
         self.push_run(cmd, opts.user);
         self
@@ -1945,5 +2379,299 @@ CMD npm start
             .expect("build_in_background with default cpu/mem should succeed");
 
         assert_eq!(info.template_id, "tpl_def");
+    }
+
+    // ── Task 3: run_cmd / run_cmds ────────────────────────────────────────────
+
+    #[test]
+    fn run_cmd_pushes_run_with_user() {
+        let t = Template::new().run_cmd(
+            "echo hello",
+            RunCmdOpts {
+                user: Some("root".to_string()),
+            },
+        );
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(instr.instruction_type, InstructionType::Run);
+        // args[0] is the command, args[1] is the user
+        assert_eq!(instr.args[0], "echo hello");
+        assert_eq!(instr.args.get(1).map(String::as_str), Some("root"));
+    }
+
+    #[test]
+    fn run_cmd_no_user_args_length_one() {
+        let t = Template::new().run_cmd("ls -la", RunCmdOpts::default());
+        assert_eq!(t.instructions[0].args.len(), 1);
+        assert_eq!(t.instructions[0].args[0], "ls -la");
+    }
+
+    #[test]
+    fn run_cmds_joins_with_and() {
+        let t = Template::new().run_cmds(&["a", "b", "c"], RunCmdOpts::default());
+        assert_eq!(t.instructions.len(), 1);
+        assert_eq!(t.instructions[0].args[0], "a && b && c");
+        assert_eq!(t.instructions[0].args.len(), 1); // no user
+    }
+
+    // ── Task 3: set_workdir / set_user ────────────────────────────────────────
+
+    #[test]
+    fn set_workdir_pushes_workdir_instruction() {
+        let t = Template::new().set_workdir("/app");
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(instr.instruction_type, InstructionType::Workdir);
+        assert_eq!(instr.args, vec!["/app"]);
+    }
+
+    #[test]
+    fn set_user_pushes_user_instruction() {
+        let t = Template::new().set_user("myuser");
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(instr.instruction_type, InstructionType::User);
+        assert_eq!(instr.args, vec!["myuser"]);
+    }
+
+    // ── Task 3: set_envs ──────────────────────────────────────────────────────
+
+    #[test]
+    fn set_envs_flat_interleaved_args_sorted() {
+        let mut envs = BTreeMap::new();
+        envs.insert("Z".to_string(), "last".to_string());
+        envs.insert("A".to_string(), "first".to_string());
+        envs.insert("M".to_string(), "mid".to_string());
+
+        let t = Template::new().set_envs(envs);
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(instr.instruction_type, InstructionType::Env);
+        // BTreeMap order: A, M, Z
+        assert_eq!(instr.args, vec!["A", "first", "M", "mid", "Z", "last"]);
+    }
+
+    #[test]
+    fn set_envs_empty_map_no_instruction() {
+        let t = Template::new().set_envs(BTreeMap::new());
+        assert_eq!(
+            t.instructions.len(),
+            0,
+            "empty envs must not push instruction"
+        );
+    }
+
+    // ── Task 3: pip_install ───────────────────────────────────────────────────
+
+    #[test]
+    fn pip_install_default_global_no_packages_installs_dot() {
+        // global=true (default), no packages → `pip install .` as root
+        let t = Template::new().pip_install(&[], PipInstallOpts::default());
+        let instr = &t.instructions[0];
+        assert_eq!(instr.args[0], "pip install .");
+        assert_eq!(instr.args.get(1).map(String::as_str), Some("root"));
+    }
+
+    #[test]
+    fn pip_install_global_with_packages() {
+        let t = Template::new().pip_install(
+            &["requests", "flask"],
+            PipInstallOpts::default(), // global=true
+        );
+        assert_eq!(t.instructions[0].args[0], "pip install requests flask");
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn pip_install_user_flag_when_not_global() {
+        let t = Template::new().pip_install(&["mypackage"], PipInstallOpts { global: false });
+        assert_eq!(t.instructions[0].args[0], "pip install --user mypackage");
+        // no user arg when global=false
+        assert_eq!(t.instructions[0].args.len(), 1);
+    }
+
+    #[test]
+    fn pip_install_user_flag_no_packages_installs_dot() {
+        let t = Template::new().pip_install(&[], PipInstallOpts { global: false });
+        assert_eq!(t.instructions[0].args[0], "pip install --user .");
+        assert_eq!(t.instructions[0].args.len(), 1); // no user in args
+    }
+
+    // ── Task 3: npm_install ───────────────────────────────────────────────────
+
+    #[test]
+    fn npm_install_flags_global_and_dev() {
+        let t = Template::new().npm_install(
+            &["a", "b"],
+            NpmInstallOpts {
+                global: true,
+                dev: true,
+            },
+        );
+        assert_eq!(t.instructions[0].args[0], "npm install -g --save-dev a b");
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn npm_install_no_flags_no_user() {
+        let t = Template::new().npm_install(&["express"], NpmInstallOpts::default());
+        assert_eq!(t.instructions[0].args[0], "npm install express");
+        assert_eq!(t.instructions[0].args.len(), 1); // no user
+    }
+
+    // ── Task 3: bun_install ───────────────────────────────────────────────────
+
+    #[test]
+    fn bun_install_global_sets_root_user() {
+        let t = Template::new().bun_install(
+            &["a"],
+            BunInstallOpts {
+                global: true,
+                dev: false,
+            },
+        );
+        assert_eq!(t.instructions[0].args[0], "bun install -g a");
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn bun_install_dev_flag() {
+        let t = Template::new().bun_install(
+            &["vitest"],
+            BunInstallOpts {
+                global: false,
+                dev: true,
+            },
+        );
+        assert_eq!(t.instructions[0].args[0], "bun install --dev vitest");
+        assert_eq!(t.instructions[0].args.len(), 1); // no user when not global
+    }
+
+    // ── Task 3: apt_install ───────────────────────────────────────────────────
+
+    #[test]
+    fn apt_install_builds_command_with_all_flags() {
+        let t = Template::new().apt_install(
+            &["a", "b"],
+            AptInstallOpts {
+                no_install_recommends: true,
+                fix_missing: true,
+            },
+        );
+        assert_eq!(
+            t.instructions[0].args[0],
+            "apt-get update && DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y --no-install-recommends --fix-missing a b"
+        );
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn apt_install_no_flags() {
+        let t = Template::new().apt_install(&["curl"], AptInstallOpts::default());
+        assert_eq!(
+            t.instructions[0].args[0],
+            "apt-get update && DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y curl"
+        );
+        // always runs as root
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn apt_install_only_no_install_recommends() {
+        let t = Template::new().apt_install(
+            &["git"],
+            AptInstallOpts {
+                no_install_recommends: true,
+                fix_missing: false,
+            },
+        );
+        assert_eq!(
+            t.instructions[0].args[0],
+            "apt-get update && DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y --no-install-recommends git"
+        );
+    }
+
+    // ── Task 3: git_clone ─────────────────────────────────────────────────────
+
+    #[test]
+    fn git_clone_full_with_all_options() {
+        let t = Template::new().git_clone(
+            "https://github.com/owner/repo.git",
+            Some("/opt/repo"),
+            GitCloneOpts {
+                branch: Some("main".to_string()),
+                depth: Some(1),
+                user: Some("deployer".to_string()),
+            },
+        );
+        assert_eq!(
+            t.instructions[0].args[0],
+            "git clone https://github.com/owner/repo.git --branch main --single-branch --depth 1 /opt/repo"
+        );
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("deployer")
+        );
+    }
+
+    #[test]
+    fn git_clone_minimal_no_options() {
+        let t = Template::new().git_clone(
+            "https://github.com/owner/repo.git",
+            None,
+            GitCloneOpts::default(),
+        );
+        assert_eq!(
+            t.instructions[0].args[0],
+            "git clone https://github.com/owner/repo.git"
+        );
+        assert_eq!(t.instructions[0].args.len(), 1); // no user
+    }
+
+    #[test]
+    fn git_clone_url_with_spaces_gets_shell_quoted() {
+        let t = Template::new().git_clone(
+            "git@example.com:user/my repo.git",
+            None,
+            GitCloneOpts::default(),
+        );
+        // URL has a space → must be shell-quoted
+        assert_eq!(
+            t.instructions[0].args[0],
+            "git clone 'git@example.com:user/my repo.git'"
+        );
+    }
+
+    #[test]
+    fn git_clone_branch_without_depth_or_path() {
+        let t = Template::new().git_clone(
+            "https://github.com/owner/repo.git",
+            None,
+            GitCloneOpts {
+                branch: Some("feat/my-feature".to_string()),
+                depth: None,
+                user: None,
+            },
+        );
+        // branch has `/` and `-`, which are safe shell chars → no quoting
+        assert_eq!(
+            t.instructions[0].args[0],
+            "git clone https://github.com/owner/repo.git --branch feat/my-feature --single-branch"
+        );
     }
 }
