@@ -9,9 +9,6 @@
 //! the template builder and are not part of the public API.
 //!
 //! These functions are called by Task 3 of Plan 5c (build orchestration).
-//! Until those callers land, the linter sees the items as unused; the allow
-//! below suppresses those false positives.
-#![allow(dead_code)]
 
 use std::path::Path;
 

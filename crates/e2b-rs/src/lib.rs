@@ -123,7 +123,7 @@ pub mod volume;
 pub mod template;
 
 pub use template::{
-    BuildInfo, BuildOptions, BuildStatus, BuildStatusReason, CopyItem, Instruction,
+    BuildHandle, BuildInfo, BuildOptions, BuildStatus, BuildStatusReason, CopyItem, Instruction,
     InstructionType, LogEntry, LogEntryLevel, ReadyCmd, RegistryConfig, Template,
     TemplateBuildStatusResponse, TemplateTag, wait_for_file, wait_for_port, wait_for_process,
     wait_for_timeout, wait_for_url,

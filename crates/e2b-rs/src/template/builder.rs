@@ -94,8 +94,6 @@ impl RegistryConfig {
     ///
     /// Used internally by [`Template::serialize`] to build the API request
     /// body. The generated type is never exposed in the public API.
-    // Called by Template::serialize; suppress dead_code until Task 2 calls it.
-    #[allow(dead_code)]
     pub(crate) fn to_wire(&self) -> crate::api::schema::FromImageRegistry {
         use crate::api::schema::{
             AwsRegistry, AwsRegistryType, FromImageRegistry, GcpRegistry, GcpRegistryType,
@@ -226,12 +224,8 @@ pub struct Template {
     /// (corresponds to [`Template::skip_cache`]).
     pub(crate) force: bool,
     /// CPU count override for the build sandbox.
-    // Forwarded to the build-trigger HTTP request in Task 2/3.
-    #[allow(dead_code)]
     pub(crate) cpu_count: Option<u32>,
     /// Memory override for the build sandbox, in MiB.
-    // Forwarded to the build-trigger HTTP request in Task 2/3.
-    #[allow(dead_code)]
     pub(crate) memory_mb: Option<u32>,
 }
 
@@ -374,12 +368,33 @@ impl Template {
     /// | [`InstructionType::Workdir`] | `"WORKDIR"` |
     /// | [`InstructionType::User`] | `"USER"` |
     ///
-    /// Called by the HTTP build layer (Task 2) before passing the result to
+    /// Called by tests and by the HTTP build layer before passing the result to
     /// [`Template::serialize`].
-    // Called by the HTTP layer in Tasks 2–3; suppress dead_code until then.
+    // Used in tests; `instruction_steps_from` is the production path.
     #[allow(dead_code)]
     pub(crate) fn instruction_steps(&self) -> Vec<crate::api::schema::TemplateStep> {
         self.instructions
+            .iter()
+            .map(|instr| crate::api::schema::TemplateStep {
+                type_: instruction_type_str(instr.instruction_type),
+                args: instr.args.clone(),
+                files_hash: instr.files_hash.clone(),
+                force: instr.force,
+            })
+            .collect()
+    }
+
+    /// Map a slice of [`Instruction`]s (typically hash-enriched) to
+    /// [`crate::api::schema::TemplateStep`] wire types.
+    ///
+    /// This is like [`Template::instruction_steps`] but operates on an
+    /// arbitrary instruction slice rather than `self.instructions`. The build
+    /// layer calls this with the hash-filled instructions returned by
+    /// [`crate::template::build_api::instructions_with_hashes`].
+    pub(crate) fn instruction_steps_from(
+        instructions: &[Instruction],
+    ) -> Vec<crate::api::schema::TemplateStep> {
+        instructions
             .iter()
             .map(|instr| crate::api::schema::TemplateStep {
                 type_: instruction_type_str(instr.instruction_type),
@@ -394,12 +409,9 @@ impl Template {
     /// [`crate::api::schema::TemplateBuildStartV2`] body.
     ///
     /// `steps` should be the result of [`Template::instruction_steps`] (or an
-    /// enriched version with `files_hash` populated by the upload layer in
-    /// Task 3).
+    /// enriched version with `files_hash` populated by the upload layer).
     ///
     /// This is a port of `serialize` in the JavaScript SDK (`index.ts:1301`).
-    // Called by the HTTP layer in Tasks 2–3; suppress dead_code until then.
-    #[allow(dead_code)]
     pub(crate) fn serialize(
         &self,
         steps: Vec<crate::api::schema::TemplateStep>,
@@ -413,6 +425,189 @@ impl Template {
             from_template: self.base_template.clone(),
             from_image_registry: self.registry_config.as_ref().map(|r| r.to_wire()),
         }
+    }
+
+    /// Build this template and return a [`crate::template::handle::BuildHandle`]
+    /// for streaming log entries.
+    ///
+    /// Consumes `self`. The returned handle allows callers to stream log entries
+    /// via [`crate::template::handle::BuildHandle::next`] and to await build
+    /// completion via [`crate::template::handle::BuildHandle::wait`].
+    ///
+    /// # Build context
+    ///
+    /// Files are uploaded from the **current working directory**
+    /// (`std::env::current_dir()`). A configurable context path is a future
+    /// carry-forward.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the API key is missing or invalid, if any HTTP call
+    /// fails, or if the build context cannot be read.
+    pub async fn build(
+        self,
+        name: &str,
+        opts: BuildOptions,
+    ) -> crate::errors::Result<crate::template::handle::BuildHandle> {
+        use std::sync::Arc;
+
+        use crate::api::client::ApiClient;
+        use crate::connection_config::{ConnectionConfig, ConnectionConfigOpts};
+        use crate::template::build_api::{
+            instructions_with_hashes, request_build, trigger_build, upload_build_context,
+        };
+        use crate::template::handle::{BuildHandle, wait_for_build_finish};
+        use tokio::sync::{mpsc, oneshot};
+
+        // 1. Resolve ConnectionConfig + ApiClient.
+        let config = ConnectionConfig::new(ConnectionConfigOpts {
+            api_key: opts.api_key.clone(),
+            domain: opts.domain.clone(),
+            api_url: opts.api_url.clone(),
+            request_timeout_ms: opts.request_timeout_ms,
+            ..Default::default()
+        });
+        let api = Arc::new(ApiClient::new(&config, true)?);
+
+        // 2. Parse "name:tag" form.
+        let (template_name, extra_tag) = normalize_build_name(name);
+        let tags: Vec<String> = extra_tag.into_iter().collect();
+
+        // 3. Request a build slot from the control plane.
+        let resp = request_build(
+            &api,
+            &template_name,
+            &tags,
+            opts.cpu_count.or(self.cpu_count),
+            opts.memory_mb.or(self.memory_mb),
+        )
+        .await?;
+
+        // 4. Resolve build context directory (default: cwd).
+        let context = std::env::current_dir().map_err(|e| {
+            crate::errors::Error::Internal(format!("failed to get current directory: {e}"))
+        })?;
+
+        // 5. Populate `files_hash` on COPY instructions.
+        let instrs = instructions_with_hashes(&self.instructions, &context)?;
+
+        // 6. Upload file-context archives for instructions not already cached.
+        let http = reqwest::Client::new();
+        upload_build_context(&api, &http, &resp.template_id, &instrs, &context).await?;
+
+        // 7. Trigger the build with hash-filled steps; honour skip_cache override.
+        let steps = Template::instruction_steps_from(&instrs);
+        let mut body = self.serialize(steps);
+        body.force = opts.skip_cache || body.force;
+        trigger_build(&api, &resp.template_id, &resp.build_id, &body).await?;
+
+        // 8. Construct the BuildInfo returned to the caller.
+        let info = crate::template::types::BuildInfo {
+            template_id: resp.template_id.clone(),
+            build_id: resp.build_id.clone(),
+            name: Some(template_name.clone()),
+            alias: None,
+            tags: tags.clone(),
+        };
+
+        // 9. Spawn poll task; wire channels; return handle.
+        let (tx_logs, rx_logs) = mpsc::channel::<crate::template::log::LogEntry>(128);
+        let (tx_result, rx_result) =
+            oneshot::channel::<crate::errors::Result<crate::template::types::BuildInfo>>();
+        let info_clone = info.clone();
+        let api_arc = Arc::clone(&api);
+        let tid = resp.template_id.clone();
+        let bid = resp.build_id.clone();
+        let task = tokio::spawn(async move {
+            let r = wait_for_build_finish(api_arc, tid, bid, 200, tx_logs)
+                .await
+                .map(|()| info_clone);
+            let _ = tx_result.send(r);
+        });
+
+        Ok(BuildHandle::new(rx_logs, rx_result, task, info))
+    }
+
+    /// Build this template in the background and return immediately with
+    /// [`crate::template::types::BuildInfo`] containing the template and build
+    /// identifiers.
+    ///
+    /// Unlike [`Template::build`], this method does **not** wait for the build
+    /// to complete or stream log entries. The build continues asynchronously on
+    /// E2B infrastructure.
+    ///
+    /// # Build context
+    ///
+    /// Files are uploaded from the **current working directory**. See
+    /// [`Template::build`] for details.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the API key is missing or invalid, if any HTTP call
+    /// fails, or if the build context cannot be read.
+    pub async fn build_in_background(
+        self,
+        name: &str,
+        opts: BuildOptions,
+    ) -> crate::errors::Result<crate::template::types::BuildInfo> {
+        use std::sync::Arc;
+
+        use crate::api::client::ApiClient;
+        use crate::connection_config::{ConnectionConfig, ConnectionConfigOpts};
+        use crate::template::build_api::{
+            instructions_with_hashes, request_build, trigger_build, upload_build_context,
+        };
+
+        // 1. Resolve ConnectionConfig + ApiClient.
+        let config = ConnectionConfig::new(ConnectionConfigOpts {
+            api_key: opts.api_key.clone(),
+            domain: opts.domain.clone(),
+            api_url: opts.api_url.clone(),
+            request_timeout_ms: opts.request_timeout_ms,
+            ..Default::default()
+        });
+        let api = Arc::new(ApiClient::new(&config, true)?);
+
+        // 2. Parse "name:tag" form.
+        let (template_name, extra_tag) = normalize_build_name(name);
+        let tags: Vec<String> = extra_tag.into_iter().collect();
+
+        // 3. Request a build slot from the control plane.
+        let resp = request_build(
+            &api,
+            &template_name,
+            &tags,
+            opts.cpu_count.or(self.cpu_count),
+            opts.memory_mb.or(self.memory_mb),
+        )
+        .await?;
+
+        // 4. Resolve build context directory (default: cwd).
+        let context = std::env::current_dir().map_err(|e| {
+            crate::errors::Error::Internal(format!("failed to get current directory: {e}"))
+        })?;
+
+        // 5. Populate `files_hash` on COPY instructions.
+        let instrs = instructions_with_hashes(&self.instructions, &context)?;
+
+        // 6. Upload file-context archives for instructions not already cached.
+        let http = reqwest::Client::new();
+        upload_build_context(&api, &http, &resp.template_id, &instrs, &context).await?;
+
+        // 7. Trigger the build; honour skip_cache override.
+        let steps = Template::instruction_steps_from(&instrs);
+        let mut body = self.serialize(steps);
+        body.force = opts.skip_cache || body.force;
+        trigger_build(&api, &resp.template_id, &resp.build_id, &body).await?;
+
+        // 8. Return BuildInfo immediately — no poll task is spawned.
+        Ok(crate::template::types::BuildInfo {
+            template_id: resp.template_id,
+            build_id: resp.build_id,
+            name: Some(template_name),
+            alias: None,
+            tags,
+        })
     }
 }
 
@@ -498,6 +693,18 @@ fn apply_action(mut template: Template, action: DockerfileAction) -> Template {
         }
     }
     template
+}
+
+/// Split a `"name"` or `"name:tag"` string into `(name, Option<tag>)`.
+///
+/// If the name contains a colon, everything before the first colon is the
+/// base name and everything after is treated as a tag for the build request.
+/// Names without a colon return `(name, None)`.
+fn normalize_build_name(raw: &str) -> (String, Option<String>) {
+    match raw.split_once(':') {
+        Some((n, t)) if !n.is_empty() && !t.is_empty() => (n.to_string(), Some(t.to_string())),
+        _ => (raw.to_string(), None),
+    }
 }
 
 /// Convert an [`InstructionType`] to its wire-format string representation.
@@ -850,5 +1057,82 @@ CMD npm start
 
         // BTreeMap iteration is sorted ascending
         assert_eq!(env.args, vec!["A", "first", "Z", "last"]);
+    }
+
+    // ── normalize_build_name ──────────────────────────────────────────────────
+
+    #[test]
+    fn normalize_build_name_splits_tag() {
+        assert_eq!(
+            normalize_build_name("my-env:v1"),
+            ("my-env".to_string(), Some("v1".to_string()))
+        );
+        // No colon → no tag.
+        assert_eq!(normalize_build_name("my-env"), ("my-env".to_string(), None));
+        // Empty tag after colon → treated as no tag (whole string is the name).
+        assert_eq!(
+            normalize_build_name("my-env:"),
+            ("my-env:".to_string(), None)
+        );
+    }
+
+    // ── build_in_background — no poll task ─────────────────────────────────────
+
+    /// `build_in_background` must request a slot, trigger the build, and return
+    /// the [`BuildInfo`] immediately WITHOUT polling the build-status endpoint.
+    #[tokio::test]
+    async fn build_in_background_skips_poll() {
+        use wiremock::matchers::{method, path, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        // request_build → returns template/build ids.
+        Mock::given(method("POST"))
+            .and(path("/v3/templates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "templateID": "tpl_bg",
+                "buildID": "bld_bg",
+                "aliases": [],
+                "names": ["my-env"],
+                "public": false,
+                "tags": []
+            })))
+            .mount(&server)
+            .await;
+
+        // trigger_build → 204.
+        Mock::given(method("POST"))
+            .and(path("/v2/templates/tpl_bg/builds/bld_bg"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        // status endpoint must NEVER be called by build_in_background.
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/templates/.+/builds/.+/status$"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        // A template with NO COPY instructions → no file uploads happen.
+        let template = Template::new().from_image("node:20");
+        let opts = BuildOptions {
+            api_key: Some("e2b_0123456789abcdef".to_string()),
+            api_url: Some(server.uri()),
+            ..Default::default()
+        };
+
+        let info = template
+            .build_in_background("my-env", opts)
+            .await
+            .expect("build_in_background should succeed");
+
+        assert_eq!(info.template_id, "tpl_bg");
+        assert_eq!(info.build_id, "bld_bg");
+        assert_eq!(info.name.as_deref(), Some("my-env"));
+
+        // wiremock asserts the status-endpoint `expect(0)` on server drop.
     }
 }
