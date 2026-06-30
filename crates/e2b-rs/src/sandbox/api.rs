@@ -2,30 +2,43 @@
 
 use crate::api::client::ApiClient;
 use crate::api::schema as api_schema;
+use crate::envd::versions::version_gte;
 use crate::errors::{Error, Result};
 use crate::sandbox::opts::SandboxCreateOpts;
 use crate::utils::timeout_to_seconds;
 use std::time::Duration;
 
 /// Default sandbox lifetime (5 minutes), matching `DEFAULT_SANDBOX_TIMEOUT_MS`.
-#[allow(dead_code)] // consumed by create_sandbox; silenced until Task 4 wires callers
 const DEFAULT_TIMEOUT: Duration =
     Duration::from_millis(crate::connection_config::DEFAULT_SANDBOX_TIMEOUT_MS);
 
-/// Map create options to the generated `NewSandbox` body and POST it.
-#[allow(dead_code)] // consumed by Task 4 Sandbox::create
+/// Lowest envd version this SDK can talk to; older templates must be rebuilt.
+const MIN_ENVD_VERSION: &str = "0.1.0";
+
+/// Map create options to the `NewSandbox` body, POST it, and validate the
+/// returned envd version (mirrors JS `createSandbox`).
+///
+/// `POST /sandboxes` returns the lean `Sandbox` schema (NOT `SandboxDetail`),
+/// so we decode into [`api_schema::Sandbox`]; the richer detail is only
+/// returned by `GET /sandboxes/{id}` (see [`get_sandbox_info`]).
 pub(crate) async fn create_sandbox(
     api: &ApiClient,
     opts: &SandboxCreateOpts,
-) -> Result<api_schema::SandboxDetail> {
+) -> Result<api_schema::Sandbox> {
     let timeout = opts.timeout.unwrap_or(DEFAULT_TIMEOUT);
     let timeout_secs = timeout_to_seconds(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX));
     let template = opts.template.clone().unwrap_or_else(|| "base".to_string());
 
-    // Build the request JSON by NewSandbox field names (camelCase on the wire).
+    // Field names follow the `NewSandbox` schema. The casing is deliberately
+    // mixed and matches the spec: `templateID`/`envVars` are camelCase, but
+    // `allow_internet_access` is snake_case (NewSandbox has no serde rename).
+    // `secure`/`allow_internet_access` are always sent, defaulting to `true`,
+    // exactly as the JS SDK does (`opts?.x ?? true`).
     let mut body = serde_json::json!({
         "templateID": template,
         "timeout": timeout_secs,
+        "secure": opts.secure.unwrap_or(true),
+        "allow_internet_access": opts.allow_internet_access.unwrap_or(true),
     });
     if !opts.metadata.is_empty() {
         body["metadata"] = serde_json::to_value(&opts.metadata).unwrap_or_default();
@@ -33,34 +46,50 @@ pub(crate) async fn create_sandbox(
     if !opts.envs.is_empty() {
         body["envVars"] = serde_json::to_value(&opts.envs).unwrap_or_default();
     }
-    if let Some(secure) = opts.secure {
-        body["secure"] = serde_json::Value::Bool(secure);
-    }
-    if let Some(allow) = opts.allow_internet_access {
-        body["allowInternetAccess"] = serde_json::Value::Bool(allow);
+
+    let sandbox: api_schema::Sandbox = api
+        .request(reqwest::Method::POST, "/sandboxes", &[], Some(&body))
+        .await?;
+
+    // Templates older than envd 0.1.0 are incompatible with this SDK; JS kills
+    // the freshly-created sandbox and raises `TemplateError`.
+    if !version_gte(&sandbox.envd_version.0, MIN_ENVD_VERSION) {
+        kill_sandbox(api, &sandbox.sandbox_id).await?;
+        return Err(Error::Template(
+            "You need to update the template to use the new SDK.".to_string(),
+        ));
     }
 
-    api.request(reqwest::Method::POST, "/sandboxes", &[], Some(&body))
-        .await
+    Ok(sandbox)
 }
 
-/// Resume/connect to a sandbox.
-#[allow(dead_code)] // consumed by Task 4 Sandbox::connect
+/// Resume/connect to a (possibly paused) sandbox.
+///
+/// Like [`create_sandbox`], `POST /sandboxes/{id}/connect` returns the lean
+/// `Sandbox` schema. A 404 means the paused sandbox is gone, which JS surfaces
+/// as `SandboxNotFoundError` rather than a generic not-found.
 pub(crate) async fn connect_sandbox(
     api: &ApiClient,
     sandbox_id: &str,
     timeout: Duration,
-) -> Result<api_schema::SandboxDetail> {
+) -> Result<api_schema::Sandbox> {
     let body = serde_json::json!({
         "timeout": timeout_to_seconds(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX))
     });
     let path = format!("/sandboxes/{sandbox_id}/connect");
-    api.request(reqwest::Method::POST, &path, &[], Some(&body))
+    match api
+        .request::<api_schema::Sandbox>(reqwest::Method::POST, &path, &[], Some(&body))
         .await
+    {
+        Ok(sandbox) => Ok(sandbox),
+        Err(Error::NotFound(_)) => Err(Error::SandboxNotFound(format!(
+            "Paused sandbox {sandbox_id} not found"
+        ))),
+        Err(e) => Err(e),
+    }
 }
 
 /// Kill a sandbox. Returns `false` if it was not found (already gone).
-#[allow(dead_code)] // consumed by Task 4 Sandbox::kill
 pub(crate) async fn kill_sandbox(api: &ApiClient, sandbox_id: &str) -> Result<bool> {
     let path = format!("/sandboxes/{sandbox_id}");
     match api
@@ -73,8 +102,7 @@ pub(crate) async fn kill_sandbox(api: &ApiClient, sandbox_id: &str) -> Result<bo
     }
 }
 
-/// Fetch sandbox info.
-#[allow(dead_code)] // consumed by Task 4 Sandbox::get_info
+/// Fetch sandbox info (`GET /sandboxes/{id}` returns the rich `SandboxDetail`).
 pub(crate) async fn get_sandbox_info(
     api: &ApiClient,
     sandbox_id: &str,
@@ -84,7 +112,6 @@ pub(crate) async fn get_sandbox_info(
 }
 
 /// Set the sandbox timeout (from now).
-#[allow(dead_code)] // consumed by Task 4 Sandbox::set_timeout
 pub(crate) async fn set_sandbox_timeout(
     api: &ApiClient,
     sandbox_id: &str,
@@ -116,12 +143,14 @@ mod tests {
         ApiClient::new(&config, true).expect("api client")
     }
 
-    fn detail_json(id: &str) -> serde_json::Value {
+    /// The lean `Sandbox` schema actually returned by `POST /sandboxes` and
+    /// `/connect` — deliberately WITHOUT the `SandboxDetail`-only fields
+    /// (`cpuCount`/`memoryMB`/`state`/...). If `create`/`connect` ever revert
+    /// to decoding `SandboxDetail`, deserializing this body fails the test.
+    fn sandbox_json(id: &str, envd_version: &str) -> serde_json::Value {
         serde_json::json!({
             "sandboxID": id, "templateID": "base", "clientID": "c1",
-            "cpuCount": 2, "memoryMB": 1024, "diskSizeMB": 1024,
-            "envdVersion": "0.6.0", "state": "running",
-            "startedAt": "2026-06-30T10:00:00Z", "endAt": "2026-06-30T10:05:00Z"
+            "envdVersion": envd_version, "domain": "e2b.app"
         })
     }
 
@@ -130,11 +159,15 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/sandboxes"))
-            // NewSandbox uses templateID + timeout (seconds).
-            .and(body_partial_json(
-                serde_json::json!({"templateID": "base", "timeout": 300}),
-            ))
-            .respond_with(ResponseTemplate::new(201).set_body_json(detail_json("sbx_new")))
+            // NewSandbox: templateID + timeout (seconds); secure /
+            // allow_internet_access always sent, defaulting to true (snake_case).
+            .and(body_partial_json(serde_json::json!({
+                "templateID": "base", "timeout": 300,
+                "secure": true, "allow_internet_access": true,
+            })))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(sandbox_json("sbx_new", "0.6.0")),
+            )
             .mount(&server)
             .await;
         let api = api_for(&server);
@@ -142,8 +175,45 @@ mod tests {
             timeout: Some(Duration::from_secs(300)),
             ..Default::default()
         };
-        let detail = create_sandbox(&api, &opts).await.expect("create");
-        assert_eq!(detail.sandbox_id, "sbx_new");
+        let sandbox = create_sandbox(&api, &opts).await.expect("create");
+        assert_eq!(sandbox.sandbox_id, "sbx_new");
+    }
+
+    #[tokio::test]
+    async fn create_rejects_and_kills_old_envd_template() {
+        let server = MockServer::start().await;
+        // POST returns a sandbox whose envd is older than the 0.1.0 floor.
+        Mock::given(method("POST"))
+            .and(path("/sandboxes"))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(sandbox_json("sbx_old", "0.0.9")),
+            )
+            .mount(&server)
+            .await;
+        // The SDK must kill it before surfacing the TemplateError.
+        Mock::given(method("DELETE"))
+            .and(path("/sandboxes/sbx_old"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let err = create_sandbox(&api_for(&server), &SandboxCreateOpts::default())
+            .await
+            .expect_err("old template must be rejected");
+        assert!(matches!(err, Error::Template(_)));
+    }
+
+    #[tokio::test]
+    async fn connect_maps_404_to_sandbox_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sandboxes/sbx_paused/connect"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let err = connect_sandbox(&api_for(&server), "sbx_paused", Duration::from_secs(60))
+            .await
+            .expect_err("missing paused sandbox");
+        assert!(matches!(err, Error::SandboxNotFound(_)));
     }
 
     #[tokio::test]

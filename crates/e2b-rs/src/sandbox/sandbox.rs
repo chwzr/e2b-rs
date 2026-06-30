@@ -112,17 +112,18 @@ impl Sandbox {
         crate::sandbox::paginator::SandboxPaginator::new(opts)
     }
 
-    /// Build a `Sandbox` from a control-plane detail + the resolved config/client.
-    fn from_detail(
-        detail: crate::api::schema::SandboxDetail,
+    /// Build a `Sandbox` from a `create`/`connect` response (the lean
+    /// `api::schema::Sandbox`) plus the resolved config/client.
+    fn from_api_sandbox(
+        s: crate::api::schema::Sandbox,
         config: ConnectionConfig,
         api: ApiClient,
     ) -> Sandbox {
         Sandbox {
-            sandbox_id: detail.sandbox_id,
-            sandbox_domain: detail.domain,
-            envd_version: detail.envd_version.0,
-            envd_access_token: detail.envd_access_token,
+            sandbox_id: s.sandbox_id,
+            sandbox_domain: s.domain,
+            envd_version: s.envd_version.0,
+            envd_access_token: s.envd_access_token,
             config,
             api,
         }
@@ -192,6 +193,20 @@ impl SandboxCreateBuilder {
         self.opts.connection.debug = Some(debug);
         self
     }
+
+    /// Whether to use a secure (authenticated) connection to the sandbox
+    /// (defaults to `true`, matching the JS SDK).
+    pub fn secure(mut self, secure: bool) -> Self {
+        self.opts.secure = Some(secure);
+        self
+    }
+
+    /// Whether the sandbox may access the public internet (defaults to `true`,
+    /// matching the JS SDK).
+    pub fn allow_internet_access(mut self, allow: bool) -> Self {
+        self.opts.allow_internet_access = Some(allow);
+        self
+    }
 }
 
 impl IntoFuture for SandboxCreateBuilder {
@@ -202,8 +217,8 @@ impl IntoFuture for SandboxCreateBuilder {
         Box::pin(async move {
             let config = ConnectionConfig::new(self.opts.connection.clone());
             let api = ApiClient::new(&config, true)?;
-            let detail = api::create_sandbox(&api, &self.opts).await?;
-            Ok(Sandbox::from_detail(detail, config, api))
+            let sandbox = api::create_sandbox(&api, &self.opts).await?;
+            Ok(Sandbox::from_api_sandbox(sandbox, config, api))
         })
     }
 }
@@ -251,8 +266,8 @@ impl IntoFuture for SandboxConnectBuilder {
             let timeout = self.opts.timeout.unwrap_or(Duration::from_millis(
                 crate::connection_config::DEFAULT_SANDBOX_TIMEOUT_MS,
             ));
-            let detail = api::connect_sandbox(&api, &self.sandbox_id, timeout).await?;
-            Ok(Sandbox::from_detail(detail, config, api))
+            let sandbox = api::connect_sandbox(&api, &self.sandbox_id, timeout).await?;
+            Ok(Sandbox::from_api_sandbox(sandbox, config, api))
         })
     }
 }
@@ -264,6 +279,7 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// The rich `SandboxDetail` returned by `GET /sandboxes/{id}`.
     fn detail_json(id: &str, state: &str) -> serde_json::Value {
         serde_json::json!({
             "sandboxID": id, "templateID": "base", "clientID": "c1",
@@ -273,12 +289,21 @@ mod tests {
         })
     }
 
+    /// The lean `Sandbox` returned by `POST /sandboxes` and `/connect` — no
+    /// `cpuCount`/`memoryMB`/`state` fields, matching the real wire response.
+    fn sandbox_json(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "sandboxID": id, "templateID": "base", "clientID": "c1",
+            "envdVersion": "0.6.0", "domain": "e2b.app"
+        })
+    }
+
     #[tokio::test]
     async fn create_builds_a_sandbox_and_awaits_directly() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/sandboxes"))
-            .respond_with(ResponseTemplate::new(201).set_body_json(detail_json("sbx_c", "running")))
+            .respond_with(ResponseTemplate::new(201).set_body_json(sandbox_json("sbx_c")))
             .mount(&server)
             .await;
         // Builder + direct `.await` (IntoFuture).
@@ -299,7 +324,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/sandboxes"))
-            .respond_with(ResponseTemplate::new(201).set_body_json(detail_json("sbx_i", "running")))
+            .respond_with(ResponseTemplate::new(201).set_body_json(sandbox_json("sbx_i")))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
