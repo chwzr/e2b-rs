@@ -1,5 +1,5 @@
 //! Template builder foundation — ready-check command generators, build-log
-//! types, and build-status/tag public wrappers.
+//! types, build-status/tag wrappers, and builder data types.
 //!
 //! This module provides:
 //! - [`ReadyCmd`] and the five free functions that produce POSIX shell command
@@ -9,6 +9,10 @@
 //! - [`BuildStatus`], [`BuildStatusReason`], [`TemplateTag`], and
 //!   [`TemplateBuildStatusResponse`] — status/tag wrapper types that map the
 //!   generated API schema types to an ergonomic public API.
+//! - [`BuildInfo`] — result of a build-trigger call, mapped from the
+//!   internal `TemplateRequestResponseV3` wire type.
+//! - [`InstructionType`], [`Instruction`], [`CopyItem`] — builder data types
+//!   consumed by Plans 5c/5d to construct and serialize template build steps.
 //!
 //! HTTP calls and full build orchestration arrive in later milestones.
 
@@ -20,4 +24,7 @@ pub use log::{LogEntry, LogEntryLevel};
 pub use readycmd::{
     ReadyCmd, wait_for_file, wait_for_port, wait_for_process, wait_for_timeout, wait_for_url,
 };
-pub use types::{BuildStatus, BuildStatusReason, TemplateBuildStatusResponse, TemplateTag};
+pub use types::{
+    BuildInfo, BuildStatus, BuildStatusReason, CopyItem, Instruction, InstructionType,
+    TemplateBuildStatusResponse, TemplateTag,
+};

@@ -1,4 +1,4 @@
-//! Build-status and template-tag wrapper types for the template builder.
+//! Build-status, template-tag, and builder data types for the template builder.
 //!
 //! These types wrap the generated API schema types (which remain
 //! `pub(crate)`) and expose a stable, ergonomic public interface. All
@@ -13,6 +13,10 @@
 //! - [`BuildStatusReason`]
 //! - [`TemplateTag`]
 //! - [`TemplateBuildStatusResponse`]
+//! - [`BuildInfo`]
+//! - [`InstructionType`]
+//! - [`Instruction`]
+//! - [`CopyItem`]
 
 use chrono::{DateTime, Utc};
 
@@ -158,6 +162,123 @@ impl TemplateBuildStatusResponse {
     }
 }
 
+/// The type of a single instruction in the template build pipeline.
+///
+/// Mirrors the JavaScript SDK's `InstructionType` enum
+/// (`COPY` / `ENV` / `RUN` / `WORKDIR` / `USER`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstructionType {
+    /// Copy files or directories into the image (`COPY`).
+    Copy,
+    /// Set an environment variable (`ENV`).
+    Env,
+    /// Run a shell command (`RUN`).
+    Run,
+    /// Change the working directory (`WORKDIR`).
+    Workdir,
+    /// Change the current user (`USER`).
+    User,
+}
+
+/// A single step in the template build pipeline.
+///
+/// Plans 5c/5d construct these and serialize them into the internal
+/// `TemplateStep` wire type. This struct is the internal-but-public
+/// representation used by builder methods.
+#[derive(Debug, Clone)]
+pub struct Instruction {
+    /// The kind of this build instruction.
+    pub instruction_type: InstructionType,
+    /// Arguments passed to the instruction (e.g. source and destination paths,
+    /// command strings, or key=value pairs).
+    pub args: Vec<String>,
+    /// If `true`, this instruction bypasses the build cache and is always
+    /// re-executed.
+    pub force: bool,
+    /// If `true`, forces the file-upload step for `COPY` instructions even
+    /// when the content hash matches.
+    pub force_upload: Option<bool>,
+    /// Content hash of the files involved in this instruction. Used by the
+    /// build cache to detect changes.
+    pub files_hash: Option<String>,
+    /// Whether symbolic links in source paths should be resolved to their
+    /// targets before copying.
+    pub resolve_symlinks: bool,
+}
+
+/// Configuration for a single file or directory copy operation.
+///
+/// Mirrors the JavaScript SDK's `CopyItem` type. Collected by
+/// [`crate::template`] builder methods and converted to [`Instruction`]
+/// entries during build preparation (Plan 5c).
+#[derive(Debug, Clone, Default)]
+pub struct CopyItem {
+    /// Source paths to copy. In the JS SDK, `src` accepts a single `PathLike`
+    /// or an array; here it is always a `Vec<String>`.
+    pub src: Vec<String>,
+    /// Destination path inside the template image.
+    pub dest: String,
+    /// If `true`, forces the file upload even when the content hash matches.
+    pub force_upload: Option<bool>,
+    /// User (and optionally group) for the copied files, e.g. `"user:group"`.
+    pub user: Option<String>,
+    /// Unix file permission bits for the copied files (e.g. `0o755`).
+    pub mode: Option<u32>,
+    /// Whether to resolve symbolic links in source paths before copying.
+    pub resolve_symlinks: bool,
+}
+
+/// Result of triggering a template build.
+///
+/// Returned after the build-trigger HTTP call succeeds (Plan 5c). Fields are
+/// mapped from the internal `TemplateRequestResponseV3` wire type.
+///
+/// # Field mapping
+///
+/// | `BuildInfo` field | Wire source | Note |
+/// |---|---|---|
+/// | `template_id` | `templateID` | direct |
+/// | `build_id` | `buildID` | direct |
+/// | `name` | `names[0]` | first entry; `None` if the array is empty |
+/// | `alias` | `aliases[0]` | first entry; `None` if the array is empty; **deprecated** |
+/// | `tags` | `tags` | direct |
+#[derive(Debug, Clone)]
+pub struct BuildInfo {
+    /// Identifier of the template.
+    pub template_id: String,
+    /// Identifier of this specific build.
+    pub build_id: String,
+    /// Name of the template (first entry from the `names` array returned by
+    /// the API). `None` when the API returns an empty `names` array.
+    pub name: Option<String>,
+    /// Deprecated alias (first entry from the `aliases` array). Present for
+    /// backward compatibility with the JS SDK's `BuildInfo.alias` field.
+    /// Prefer [`BuildInfo::name`].
+    pub alias: Option<String>,
+    /// Tags assigned to this build (e.g. `["latest", "v1"]`).
+    pub tags: Vec<String>,
+}
+
+impl BuildInfo {
+    /// Converts the generated [`crate::api::schema::TemplateRequestResponseV3`]
+    /// into a public [`BuildInfo`].
+    ///
+    /// - `name` is `names.first().cloned()` — `None` when the array is empty.
+    /// - `alias` is `aliases.first().cloned()` — `None` when the array is
+    ///   empty (the JS `alias` field is also the first entry and is deprecated).
+    // Caller arrives in Plan 5c; suppress dead-code lint until then.
+    #[allow(dead_code)]
+    pub(crate) fn from_wire(w: crate::api::schema::TemplateRequestResponseV3) -> Self {
+        Self {
+            template_id: w.template_id,
+            build_id: w.build_id,
+            name: w.names.into_iter().next(),
+            alias: w.aliases.into_iter().next(),
+            tags: w.tags,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +374,69 @@ mod tests {
         let reason = response.reason.expect("reason should be present");
         assert_eq!(reason.message, "Dockerfile syntax error");
         assert_eq!(reason.step.as_deref(), Some("build"));
+    }
+
+    #[test]
+    fn instruction_type_roundtrip() {
+        let ty = InstructionType::Copy;
+        assert_eq!(ty, InstructionType::Copy);
+        assert_ne!(ty, InstructionType::Run);
+        // Copy trait: can use after being copied
+        let ty2 = ty;
+        assert_eq!(ty, ty2);
+        // All variants are distinct
+        assert_ne!(InstructionType::Env, InstructionType::Workdir);
+        assert_ne!(InstructionType::User, InstructionType::Run);
+    }
+
+    #[test]
+    fn copy_item_defaults() {
+        let item = CopyItem::default();
+        assert!(item.src.is_empty());
+        assert_eq!(item.dest, "");
+        assert_eq!(item.force_upload, None);
+        assert_eq!(item.user, None);
+        assert_eq!(item.mode, None);
+        assert!(!item.resolve_symlinks);
+    }
+
+    #[test]
+    fn build_info_from_wire() {
+        // Honest camelCase wire JSON matching TemplateRequestResponseV3 schema.
+        let json = r#"{
+            "aliases": ["my-alias"],
+            "buildID": "build-abc",
+            "names": ["my-template"],
+            "public": false,
+            "tags": ["latest", "v1"],
+            "templateID": "tmpl-xyz"
+        }"#;
+        let wire: crate::api::schema::TemplateRequestResponseV3 =
+            serde_json::from_str(json).expect("valid TemplateRequestResponseV3 JSON");
+        let info = BuildInfo::from_wire(wire);
+        assert_eq!(info.template_id, "tmpl-xyz");
+        assert_eq!(info.build_id, "build-abc");
+        assert_eq!(info.name.as_deref(), Some("my-template"));
+        assert_eq!(info.alias.as_deref(), Some("my-alias"));
+        assert_eq!(info.tags, vec!["latest", "v1"]);
+    }
+
+    #[test]
+    fn build_info_from_wire_empty_arrays() {
+        // When names/aliases are empty, name and alias should be None.
+        let json = r#"{
+            "aliases": [],
+            "buildID": "build-001",
+            "names": [],
+            "public": true,
+            "tags": [],
+            "templateID": "tmpl-001"
+        }"#;
+        let wire: crate::api::schema::TemplateRequestResponseV3 =
+            serde_json::from_str(json).expect("valid TemplateRequestResponseV3 JSON");
+        let info = BuildInfo::from_wire(wire);
+        assert_eq!(info.name, None);
+        assert_eq!(info.alias, None);
+        assert!(info.tags.is_empty());
     }
 }

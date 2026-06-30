@@ -232,4 +232,16 @@ mod tests {
         // Multiple nested/sequential ANSI codes
         assert_eq!(strip_ansi("\x1b[1m\x1b[32mGreen Bold\x1b[0m"), "Green Bold");
     }
+
+    #[test]
+    fn strip_ansi_lone_trailing_esc_no_panic() {
+        // A lone ESC at the very end of the string must be dropped without panicking.
+        assert_eq!(strip_ansi("hello\x1b"), "hello");
+    }
+
+    #[test]
+    fn strip_ansi_multibyte_utf8_survives() {
+        // Non-ASCII characters (multibyte UTF-8) must pass through unchanged.
+        assert_eq!(strip_ansi("\x1b[31mHéllo\x1b[0m"), "Héllo");
+    }
 }
