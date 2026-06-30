@@ -4,6 +4,7 @@
 pub(crate) mod api;
 pub(crate) mod commands;
 pub(crate) mod filesystem;
+pub(crate) mod git;
 pub(crate) mod mcp_gen;
 pub(crate) mod network;
 pub mod opts;
@@ -21,6 +22,12 @@ pub use commands::{
 pub use filesystem::{
     EntryInfo, FileType, Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts,
     WatchHandle, WatchOpts, WriteEntry, WriteInfo,
+};
+pub use git::{
+    Git, GitAddOpts, GitBranches, GitCloneOpts, GitCommitOpts, GitConfigOpts, GitConfigScope,
+    GitDangerouslyAuthenticateOpts, GitDeleteBranchOpts, GitFileStatus, GitInitOpts, GitPullOpts,
+    GitPushOpts, GitRemoteAddOpts, GitRequestOpts, GitResetMode, GitResetOpts, GitRestoreOpts,
+    GitStatus, GitStatusLabel,
 };
 pub use network::{NetworkRule, SandboxNetworkUpdate};
 pub use opts::{

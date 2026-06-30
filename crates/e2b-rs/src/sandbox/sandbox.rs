@@ -49,6 +49,8 @@ pub struct Sandbox {
     pub(crate) commands: crate::sandbox::commands::Commands,
     /// Pseudo-terminal sessions (`sandbox.pty()`).
     pub(crate) pty: crate::sandbox::pty::Pty,
+    /// Git operations (`sandbox.git()`).
+    pub(crate) git: crate::sandbox::git::Git,
 }
 
 impl Sandbox {
@@ -286,6 +288,9 @@ impl Sandbox {
             s.envd_access_token.as_deref(),
             &config,
         )?;
+        // Clone `commands` before it is moved into the struct so `git` can
+        // share the same underlying connect client.
+        let git = crate::sandbox::git::Git::new(commands.clone());
         let pty = crate::sandbox::pty::Pty::build(
             &s.sandbox_id,
             &domain,
@@ -303,6 +308,7 @@ impl Sandbox {
             files,
             commands,
             pty,
+            git,
         })
     }
 
@@ -319,6 +325,11 @@ impl Sandbox {
     /// Access sandbox pseudo-terminal sessions (`create`/`resize`/...).
     pub fn pty(&self) -> &crate::sandbox::pty::Pty {
         &self.pty
+    }
+
+    /// Access sandbox git operations (`init`/`commit`/`push`/...).
+    pub fn git(&self) -> &crate::sandbox::git::Git {
+        &self.git
     }
 }
 
@@ -487,6 +498,7 @@ mod tests {
         let commands =
             crate::sandbox::commands::Commands::build("sbx_u", "e2b.app", "0.6.0", token, &config)
                 .expect("commands");
+        let git = crate::sandbox::git::Git::new(commands.clone());
         let pty = crate::sandbox::pty::Pty::build("sbx_u", "e2b.app", "0.6.0", token, &config)
             .expect("pty");
         Sandbox {
@@ -499,6 +511,7 @@ mod tests {
             files,
             commands,
             pty,
+            git,
         }
     }
 

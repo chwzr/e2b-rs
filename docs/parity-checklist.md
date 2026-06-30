@@ -115,6 +115,38 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 >
 > **Carry-forwards (out of scope):** `StreamInput` client-streaming RPC (unused by JS); tag-based process selection (only pid used); per-stream `connect-timeout-ms` / `KEEPALIVE_PING_HEADER` on long-lived streams (Plan 2b carry-forward); deduplicating the `ConnectClient` across `Filesystem`/`Commands`/`Pty` (currently one client per subsystem).
 
-## Sandbox & I/O (Plan 3, remaining) · Git & Volume (Plan 4) · Template (Plan 5)
+## Sandbox git (Plan 4a)
+
+| JS (`sandbox.git.*`) | Rust (`sandbox.git().*`) | Status |
+|---|---|---|
+| `clone(url, opts)` | `Git::clone(url, GitCloneOpts)` → `Ok(CommandResult)`; auth failure → `Err(GitAuth)` | ✅ |
+| `init(path, opts)` | `Git::init(path, GitInitOpts)` → `Ok(CommandResult)` | ✅ |
+| `status(path, user)` | `Git::status(path, user)` → `Ok(GitStatus)` | ✅ |
+| `branches(path, user)` | `Git::branches(path, user)` → `Ok(GitBranches)` | ✅ |
+| `add(path, opts)` | `Git::add(path, GitAddOpts)` → `Ok(CommandResult)` | ✅ |
+| `commit(path, message, opts)` | `Git::commit(path, message, GitCommitOpts)` → `Ok(CommandResult)` | ✅ |
+| `push(path, opts)` | `Git::push(path, GitPushOpts)` → `Ok(CommandResult)`; auth → `Err(GitAuth)`, upstream → `Err(GitUpstream)` | ✅ |
+| `pull(path, opts)` | `Git::pull(path, GitPullOpts)` → `Ok(CommandResult)`; auth → `Err(GitAuth)`, upstream → `Err(GitUpstream)` | ✅ |
+| `createBranch(path, branch, opts)` | `Git::create_branch(path, branch, GitRequestOpts)` → `Ok(CommandResult)` | ✅ |
+| `checkoutBranch(path, branch, opts)` | `Git::checkout_branch(path, branch, GitRequestOpts)` → `Ok(CommandResult)` | ✅ |
+| `deleteBranch(path, branch, opts)` | `Git::delete_branch(path, branch, GitDeleteBranchOpts)` → `Ok(CommandResult)` | ✅ |
+| `reset(path, opts)` | `Git::reset(path, GitResetOpts)` → `Ok(CommandResult)` | ✅ |
+| `restore(path, opts)` | `Git::restore(path, GitRestoreOpts)` → `Ok(CommandResult)` | ✅ |
+| `setConfig(key, value, opts)` | `Git::set_config(key, value, GitConfigOpts)` → `Ok(CommandResult)` | ✅ |
+| `getConfig(key, opts)` | `Git::get_config(key, GitConfigOpts)` → `Ok(Option<String>)` | ✅ |
+| `remoteAdd(path, name, url, opts)` | `Git::remote_add(path, name, url, GitRemoteAddOpts)` → `Ok(CommandResult)` | ✅ |
+| `remoteGet(path, name, opts)` | `Git::remote_get(path, name, GitRequestOpts)` → `Ok(Option<String>)` | ✅ |
+| `configureUser(name, email, opts)` | `Git::configure_user(name, email, GitConfigOpts)` → `Ok(CommandResult)` | ✅ |
+| `dangerouslyAuthenticate(opts)` | `Git::dangerously_authenticate(GitDangerouslyAuthenticateOpts)` → `Ok(CommandResult)` | ✅ |
+
+> **Note:** git method opt structs expose only `user` (plus method-specific flags); per-operation `envs` / `cwd` / `timeout` passthrough from JS `GitRequestOpts` is NOT exposed, and git always runs with `GIT_TERMINAL_PROMPT=0`. (Tracked follow-up, not a ✅-blocker.)
+
+> **Exit-code convention:** Non-zero git exit returns `Ok(CommandResult)` (exit code in `result.exit_code`) for all methods **except**:
+> - `clone`: auth failure → `Err(GitAuth)`.
+> - `push`/`pull` (non-credentialed path): auth failure → `Err(GitAuth)`, missing upstream → `Err(GitUpstream)`.
+>
+> **Parity quirk:** On the **credentialed** push/pull path (`with_remote_credentials`), auth/upstream errors are NOT mapped to `Err` — this matches the JS SDK asymmetry (see task-3 report). The `get_config` and `remote_get` methods use a `|| true` shell fallback so a missing key/remote returns `Ok(None)` rather than `Err`.
+
+## Volume & Template (Plan 4b / Plan 5)
 
 _Rows added as each milestone lands._

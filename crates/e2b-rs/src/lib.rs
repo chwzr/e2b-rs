@@ -74,6 +74,19 @@
 //! # }
 //! ```
 //!
+//! ## Git
+//!
+//! ```no_run
+//! # async fn run() -> e2b_rs::Result<()> {
+//! use e2b_rs::Sandbox;
+//! let sandbox = Sandbox::create().template("base").await?;
+//! sandbox.git().clone("https://github.com/owner/repo.git", Default::default()).await?;
+//! let status = sandbox.git().status("/home/user/repo", None).await?;
+//! println!("{:?}", status.current_branch);
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Resolving configuration
 //!
 //! ```
@@ -117,11 +130,15 @@ pub mod sandbox;
 pub use sandbox::signature::{Signature, SignatureOperation, get_signature, get_signature_now};
 pub use sandbox::{
     CommandHandle, CommandOutput, CommandResult, CommandStartOpts, Commands, EntryInfo, FileType,
-    Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts, NetworkRule, ProcessInfo, Pty,
-    PtyCreateOpts, PtySize, Sandbox, SandboxConnectBuilder, SandboxConnectOpts,
-    SandboxCreateBuilder, SandboxCreateOpts, SandboxInfo, SandboxListOpts, SandboxMetrics,
-    SandboxNetworkUpdate, SandboxPaginator, SandboxState, SandboxUrlOpts, SnapshotInfo,
-    SnapshotListOpts, SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry, WriteInfo,
+    Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts, Git, GitAddOpts, GitBranches,
+    GitCloneOpts, GitCommitOpts, GitConfigOpts, GitConfigScope, GitDangerouslyAuthenticateOpts,
+    GitDeleteBranchOpts, GitFileStatus, GitInitOpts, GitPullOpts, GitPushOpts, GitRemoteAddOpts,
+    GitRequestOpts, GitResetMode, GitResetOpts, GitRestoreOpts, GitStatus, GitStatusLabel,
+    NetworkRule, ProcessInfo, Pty, PtyCreateOpts, PtySize, Sandbox, SandboxConnectBuilder,
+    SandboxConnectOpts, SandboxCreateBuilder, SandboxCreateOpts, SandboxInfo, SandboxListOpts,
+    SandboxMetrics, SandboxNetworkUpdate, SandboxPaginator, SandboxState, SandboxUrlOpts,
+    SnapshotInfo, SnapshotListOpts, SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry,
+    WriteInfo,
 };
 
 pub mod paginator;

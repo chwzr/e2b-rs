@@ -59,6 +59,17 @@ while let Some(out) = cmd.next().await {
 let _ = cmd.wait().await?;
 ```
 
+Use the git API to clone repositories and inspect state inside the sandbox:
+
+```rust
+use e2b_rs::Sandbox;
+
+let sandbox = Sandbox::create().template("base").await?;
+sandbox.git().clone("https://github.com/owner/repo.git", Default::default()).await?;
+let status = sandbox.git().status("/home/user/repo", None).await?;
+println!("branch: {:?}", status.current_branch);
+```
+
 Control-plane extras are also available: pause/resume, metrics, snapshots
 (create/list/delete), network-rule updates, and signed upload/download URLs.
 

@@ -61,6 +61,7 @@ pub struct CommandStartOpts {
 /// Run and manage commands in the sandbox.
 ///
 /// Obtain via [`crate::Sandbox::commands`].
+#[derive(Clone)]
 pub struct Commands {
     /// Connect-over-JSON client for the envd RPC surface.
     pub(crate) connect: Arc<ConnectClient>,
