@@ -16,9 +16,13 @@
 //!
 //! HTTP calls and full build orchestration arrive in later milestones.
 
+pub(crate) mod archive;
+pub(crate) mod dockerfile;
+pub(crate) mod files;
 pub mod log;
 pub mod readycmd;
 pub mod types;
+pub(crate) mod upload;
 
 pub use log::{LogEntry, LogEntryLevel};
 pub use readycmd::{
