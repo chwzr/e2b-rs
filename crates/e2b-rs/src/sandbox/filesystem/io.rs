@@ -6,7 +6,8 @@ use super::{Filesystem, file_not_found_on_missing};
 use crate::errors::{Error, Result};
 
 impl Filesystem {
-    /// Read a file as UTF-8 text.
+    /// Read a file as UTF-8 text. Gzip-encoded responses are transparently
+    /// decompressed (reqwest's `gzip` feature), so no caller-side toggle is needed.
     pub async fn read(&self, path: &str, user: Option<&str>) -> Result<String> {
         let bytes = self.read_bytes(path, user).await?;
         String::from_utf8(bytes)

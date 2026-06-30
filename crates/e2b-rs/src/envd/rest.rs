@@ -80,8 +80,11 @@ impl EnvdApiClient {
         })
     }
 
-    /// `GET {base}/files?path&username`. Maps 404 to [`Error::FileNotFound`] and
-    /// other non-2xx statuses to an error; returns the streaming response on success.
+    /// `GET {base}/files?path&username`. Maps non-2xx statuses to an error via
+    /// `Error::from_status` (404 → `NotFound`; the `Filesystem` wrappers remap
+    /// that to `FileNotFound`); returns the streaming response on success. With
+    /// `gzip`, sends `Accept-Encoding: gzip` (reqwest's `gzip` feature
+    /// transparently decompresses the response).
     pub(crate) async fn get_files(
         &self,
         path: &str,
