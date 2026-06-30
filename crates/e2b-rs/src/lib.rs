@@ -123,7 +123,8 @@ pub mod volume;
 pub mod template;
 
 pub use template::{
-    ReadyCmd, wait_for_file, wait_for_port, wait_for_process, wait_for_timeout, wait_for_url,
+    BuildStatus, BuildStatusReason, LogEntry, LogEntryLevel, ReadyCmd, TemplateBuildStatusResponse,
+    TemplateTag, wait_for_file, wait_for_port, wait_for_process, wait_for_timeout, wait_for_url,
 };
 
 pub(crate) mod api;
