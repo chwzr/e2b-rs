@@ -100,6 +100,24 @@
 //! # }
 //! ```
 //!
+//! ## Templates
+//!
+//! ```no_run
+//! # async fn run() -> e2b_rs::Result<()> {
+//! use e2b_rs::Template;
+//! let template = Template::new()
+//!     .from_image("node:20")
+//!     .set_start_cmd("npm start", e2b_rs::wait_for_timeout(20_000));
+//! let mut build = template.build("my-template", Default::default()).await?;
+//! while let Some(log) = build.next().await {
+//!     println!("{log}");
+//! }
+//! let info = build.wait().await?;
+//! println!("built template {}", info.template_id);
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Resolving configuration
 //!
 //! ```
