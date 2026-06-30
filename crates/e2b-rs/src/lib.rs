@@ -96,11 +96,12 @@ pub mod sandbox;
 
 pub use sandbox::signature::{Signature, SignatureOperation, get_signature, get_signature_now};
 pub use sandbox::{
-    EntryInfo, FileType, Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts,
-    NetworkRule, Sandbox, SandboxConnectBuilder, SandboxConnectOpts, SandboxCreateBuilder,
-    SandboxCreateOpts, SandboxInfo, SandboxListOpts, SandboxMetrics, SandboxNetworkUpdate,
-    SandboxPaginator, SandboxState, SandboxUrlOpts, SnapshotInfo, SnapshotListOpts,
-    SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry, WriteInfo,
+    CommandHandle, CommandOutput, CommandResult, EntryInfo, FileType, Filesystem, FilesystemEvent,
+    FilesystemEventType, FsWriteOpts, NetworkRule, ProcessInfo, Sandbox, SandboxConnectBuilder,
+    SandboxConnectOpts, SandboxCreateBuilder, SandboxCreateOpts, SandboxInfo, SandboxListOpts,
+    SandboxMetrics, SandboxNetworkUpdate, SandboxPaginator, SandboxState, SandboxUrlOpts,
+    SnapshotInfo, SnapshotListOpts, SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry,
+    WriteInfo,
 };
 
 pub mod paginator;

@@ -2,6 +2,7 @@
 //! milestones; this milestone provides URL signatures.
 
 pub(crate) mod api;
+pub(crate) mod commands;
 pub(crate) mod filesystem;
 pub(crate) mod mcp_gen;
 pub(crate) mod network;
@@ -13,6 +14,7 @@ pub mod signature;
 pub(crate) mod snapshot_paginator;
 pub mod types;
 
+pub use commands::{CommandHandle, CommandOutput, CommandResult, ProcessInfo};
 pub use filesystem::{
     EntryInfo, FileType, Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts,
     WatchHandle, WatchOpts, WriteEntry, WriteInfo,
