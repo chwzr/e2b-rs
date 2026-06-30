@@ -70,6 +70,18 @@ let status = sandbox.git().status("/home/user/repo", None).await?;
 println!("branch: {:?}", status.current_branch);
 ```
 
+Use persistent volumes to share data between sandboxes or store large datasets
+without bundling them into a template:
+
+```rust
+use e2b_rs::Volume;
+
+let volume = Volume::create("my-data", Default::default()).await?;
+volume.write_file("/hello.txt", b"hi".to_vec(), Default::default()).await?;
+let text = volume.read_file("/hello.txt").await?;
+println!("{text}");
+```
+
 Control-plane extras are also available: pause/resume, metrics, snapshots
 (create/list/delete), network-rule updates, and signed upload/download URLs.
 

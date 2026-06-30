@@ -87,6 +87,19 @@
 //! # }
 //! ```
 //!
+//! ## Volumes
+//!
+//! ```no_run
+//! # async fn run() -> e2b_rs::Result<()> {
+//! use e2b_rs::Volume;
+//! let volume = Volume::create("my-data", Default::default()).await?;
+//! volume.write_file("/hello.txt", b"hi".to_vec(), Default::default()).await?;
+//! let text = volume.read_file("/hello.txt").await?;
+//! println!("{text}");
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Resolving configuration
 //!
 //! ```
