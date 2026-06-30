@@ -14,7 +14,9 @@ pub mod signature;
 pub(crate) mod snapshot_paginator;
 pub mod types;
 
-pub use commands::{CommandHandle, CommandOutput, CommandResult, ProcessInfo};
+pub use commands::{
+    CommandHandle, CommandOutput, CommandResult, CommandStartOpts, Commands, ProcessInfo,
+};
 pub use filesystem::{
     EntryInfo, FileType, Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts,
     WatchHandle, WatchOpts, WriteEntry, WriteInfo,
