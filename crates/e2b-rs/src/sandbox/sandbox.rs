@@ -47,6 +47,8 @@ pub struct Sandbox {
     pub(crate) files: crate::sandbox::filesystem::Filesystem,
     /// Command execution (`sandbox.commands()`).
     pub(crate) commands: crate::sandbox::commands::Commands,
+    /// Pseudo-terminal sessions (`sandbox.pty()`).
+    pub(crate) pty: crate::sandbox::pty::Pty,
 }
 
 impl Sandbox {
@@ -284,6 +286,13 @@ impl Sandbox {
             s.envd_access_token.as_deref(),
             &config,
         )?;
+        let pty = crate::sandbox::pty::Pty::build(
+            &s.sandbox_id,
+            &domain,
+            &s.envd_version.0,
+            s.envd_access_token.as_deref(),
+            &config,
+        )?;
         Ok(Sandbox {
             sandbox_id: s.sandbox_id,
             sandbox_domain,
@@ -293,6 +302,7 @@ impl Sandbox {
             api,
             files,
             commands,
+            pty,
         })
     }
 
@@ -304,6 +314,11 @@ impl Sandbox {
     /// Access sandbox command execution (`run`/`start`/...).
     pub fn commands(&self) -> &crate::sandbox::commands::Commands {
         &self.commands
+    }
+
+    /// Access sandbox pseudo-terminal sessions (`create`/`resize`/...).
+    pub fn pty(&self) -> &crate::sandbox::pty::Pty {
+        &self.pty
     }
 }
 
@@ -472,6 +487,8 @@ mod tests {
         let commands =
             crate::sandbox::commands::Commands::build("sbx_u", "e2b.app", "0.6.0", token, &config)
                 .expect("commands");
+        let pty = crate::sandbox::pty::Pty::build("sbx_u", "e2b.app", "0.6.0", token, &config)
+            .expect("pty");
         Sandbox {
             sandbox_id: "sbx_u".to_string(),
             sandbox_domain: Some("e2b.app".to_string()),
@@ -481,6 +498,7 @@ mod tests {
             api,
             files,
             commands,
+            pty,
         }
     }
 
