@@ -15,6 +15,16 @@ const DEFAULT_TIMEOUT: Duration =
 /// Lowest envd version this SDK can talk to; older templates must be rebuilt.
 const MIN_ENVD_VERSION: &str = "0.1.0";
 
+/// Map a control-plane 404 ("this sandbox is gone") to [`Error::SandboxNotFound`],
+/// matching the error the JS SDK raises for missing-sandbox operations. Other
+/// errors pass through unchanged.
+fn sandbox_not_found_on_404(err: Error, sandbox_id: &str) -> Error {
+    match err {
+        Error::NotFound(_) => Error::SandboxNotFound(format!("Sandbox {sandbox_id} not found")),
+        other => other,
+    }
+}
+
 /// Map create options to the `NewSandbox` body, POST it, and validate the
 /// returned envd version (mirrors JS `createSandbox`).
 ///
@@ -103,12 +113,15 @@ pub(crate) async fn kill_sandbox(api: &ApiClient, sandbox_id: &str) -> Result<bo
 }
 
 /// Fetch sandbox info (`GET /sandboxes/{id}` returns the rich `SandboxDetail`).
+/// A 404 means the sandbox is gone → [`Error::SandboxNotFound`] (matches JS).
 pub(crate) async fn get_sandbox_info(
     api: &ApiClient,
     sandbox_id: &str,
 ) -> Result<api_schema::SandboxDetail> {
     let path = format!("/sandboxes/{sandbox_id}");
-    api.request(reqwest::Method::GET, &path, &[], None).await
+    api.request(reqwest::Method::GET, &path, &[], None)
+        .await
+        .map_err(|e| sandbox_not_found_on_404(e, sandbox_id))
 }
 
 /// Pause a sandbox. `keep_memory` controls whether a full memory snapshot is
@@ -128,7 +141,7 @@ pub(crate) async fn pause_sandbox(
         Ok(()) => Ok(true),
         // 409 = already paused; idempotent, not an error.
         Err(Error::Conflict(_)) => Ok(false),
-        Err(e) => Err(e),
+        Err(e) => Err(sandbox_not_found_on_404(e, sandbox_id)),
     }
 }
 
@@ -148,7 +161,9 @@ pub(crate) async fn get_sandbox_metrics(
         query.push(("end", end.to_string()));
     }
     let path = format!("/sandboxes/{sandbox_id}/metrics");
-    api.request(reqwest::Method::GET, &path, &query, None).await
+    api.request(reqwest::Method::GET, &path, &query, None)
+        .await
+        .map_err(|e| sandbox_not_found_on_404(e, sandbox_id))
 }
 
 /// Create a snapshot of a sandbox. `POST /sandboxes/{id}/snapshots` → `SnapshotInfo`.
@@ -165,16 +180,9 @@ pub(crate) async fn create_snapshot(
         body["name"] = serde_json::Value::String(name.to_string());
     }
     let path = format!("/sandboxes/{sandbox_id}/snapshots");
-    match api
-        .request::<api_schema::SnapshotInfo>(reqwest::Method::POST, &path, &[], Some(&body))
+    api.request::<api_schema::SnapshotInfo>(reqwest::Method::POST, &path, &[], Some(&body))
         .await
-    {
-        Ok(info) => Ok(info),
-        Err(Error::NotFound(_)) => Err(Error::SandboxNotFound(format!(
-            "Sandbox {sandbox_id} not found"
-        ))),
-        Err(e) => Err(e),
-    }
+        .map_err(|e| sandbox_not_found_on_404(e, sandbox_id))
 }
 
 /// Delete a snapshot (a snapshot is a template). `DELETE /templates/{id}`;
@@ -191,7 +199,8 @@ pub(crate) async fn delete_snapshot(api: &ApiClient, snapshot_id: &str) -> Resul
     }
 }
 
-/// Set the sandbox timeout (from now).
+/// Set the sandbox timeout (from now). A 404 means the sandbox is gone →
+/// [`Error::SandboxNotFound`] (matches JS).
 pub(crate) async fn set_sandbox_timeout(
     api: &ApiClient,
     sandbox_id: &str,
@@ -203,9 +212,11 @@ pub(crate) async fn set_sandbox_timeout(
     let path = format!("/sandboxes/{sandbox_id}/timeout");
     api.request_unit(reqwest::Method::POST, &path, &[], Some(&body))
         .await
+        .map_err(|e| sandbox_not_found_on_404(e, sandbox_id))
 }
 
 /// Replace a sandbox's network policy. `PUT /sandboxes/{id}/network` (204).
+/// A 404 means the sandbox is gone → [`Error::SandboxNotFound`] (matches JS).
 pub(crate) async fn update_sandbox_network(
     api: &ApiClient,
     sandbox_id: &str,
@@ -214,6 +225,7 @@ pub(crate) async fn update_sandbox_network(
     let path = format!("/sandboxes/{sandbox_id}/network");
     api.request_unit(reqwest::Method::PUT, &path, &[], Some(body))
         .await
+        .map_err(|e| sandbox_not_found_on_404(e, sandbox_id))
 }
 
 #[cfg(test)]
@@ -457,5 +469,53 @@ mod tests {
         update_sandbox_network(&api_for(&server), "sbx_n", &body)
             .await
             .expect("update network");
+    }
+
+    /// All sandbox-scoped control-plane ops map a 404 to `SandboxNotFound`
+    /// (matching the JS SDK), except `kill`/`delete_snapshot` which return false.
+    #[tokio::test]
+    async fn sandbox_ops_map_404_to_sandbox_not_found() {
+        let server = MockServer::start().await;
+        for (m, p) in [
+            ("GET", "/sandboxes/sbx_x"),
+            ("POST", "/sandboxes/sbx_x/pause"),
+            ("GET", "/sandboxes/sbx_x/metrics"),
+            ("POST", "/sandboxes/sbx_x/timeout"),
+            ("PUT", "/sandboxes/sbx_x/network"),
+        ] {
+            Mock::given(method(m))
+                .and(path(p))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+        }
+        let api = api_for(&server);
+        assert!(matches!(
+            get_sandbox_info(&api, "sbx_x").await.expect_err("info"),
+            Error::SandboxNotFound(_)
+        ));
+        assert!(matches!(
+            pause_sandbox(&api, "sbx_x", true).await.expect_err("pause"),
+            Error::SandboxNotFound(_)
+        ));
+        assert!(matches!(
+            get_sandbox_metrics(&api, "sbx_x", None, None)
+                .await
+                .expect_err("metrics"),
+            Error::SandboxNotFound(_)
+        ));
+        assert!(matches!(
+            set_sandbox_timeout(&api, "sbx_x", Duration::from_secs(60))
+                .await
+                .expect_err("timeout"),
+            Error::SandboxNotFound(_)
+        ));
+        let body = serde_json::json!({ "allowOut": [] });
+        assert!(matches!(
+            update_sandbox_network(&api, "sbx_x", &body)
+                .await
+                .expect_err("network"),
+            Error::SandboxNotFound(_)
+        ));
     }
 }
