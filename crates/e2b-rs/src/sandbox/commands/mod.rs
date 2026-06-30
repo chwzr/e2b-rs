@@ -115,7 +115,7 @@ impl Commands {
 
     fn start_request(&self, cmd: &str, opts: &CommandStartOpts) -> Result<pb::StartRequest> {
         if opts.stdin == Some(false) && !version_gte(&self.envd_version, ENVD_COMMANDS_STDIN) {
-            return Err(Error::Sandbox(format!(
+            return Err(Error::Template(format!(
                 "this template's envd cannot disable stdin (requires >= {ENVD_COMMANDS_STDIN}); rebuild the template"
             )));
         }

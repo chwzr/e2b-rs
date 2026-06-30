@@ -29,9 +29,11 @@ pub(crate) fn pid_selector(pid: u32) -> pb::ProcessSelector {
 pub struct CommandHandle {
     pid: u32,
     output: mpsc::Receiver<CommandOutput>,
-    /// Wrapped in `Option` so that `wait` can `.take()` it without a
+    /// Carries the final outcome: `Ok(CommandResult)` on a clean finish (any
+    /// exit code), or `Err` if the process stream failed mid-flight (transport
+    /// error). Wrapped in `Option` so `wait` can `.take()` it without a
     /// partial-move out of a type that implements `Drop`.
-    result: Option<oneshot::Receiver<CommandResult>>,
+    result: Option<oneshot::Receiver<Result<CommandResult>>>,
     task: JoinHandle<()>,
     connect: Arc<ConnectClient>,
     envd_version: String,
@@ -52,7 +54,8 @@ impl CommandHandle {
 
     /// Wait for the command to finish and return its [`CommandResult`]. Drains
     /// any unread output first (so the background task can complete). A non-zero
-    /// `exit_code` is returned in the result, NOT as an error.
+    /// `exit_code` is returned in the result, NOT as an error; an `Err` means the
+    /// process stream itself failed (transport/RPC error) before completing.
     pub async fn wait(mut self) -> Result<CommandResult> {
         while self.output.recv().await.is_some() {}
         // `.take()` uses `&mut self.result` (no partial move), which is
@@ -61,8 +64,12 @@ impl CommandHandle {
             .result
             .take()
             .ok_or_else(|| Error::Internal("wait called twice".to_string()))?;
-        rx.await
-            .map_err(|_| Error::Internal("command ended without a result".to_string()))
+        match rx.await {
+            Ok(outcome) => outcome,
+            Err(_) => Err(Error::Internal(
+                "command ended without a result".to_string(),
+            )),
+        }
     }
 
     /// Kill the process (SIGKILL). Returns `false` if it was not found.
@@ -187,8 +194,16 @@ pub(crate) async fn open_handle(
         let mut exit_code: i32 = 0;
         let mut error: Option<String> = None;
         let mut got_end = false;
+        let mut stream_error: Option<Error> = None;
         while let Some(item) = stream.next().await {
-            let Ok(resp) = item else { break }; // stream error: break, flagged below
+            let resp = match item {
+                Ok(resp) => resp,
+                // A transport/RPC error mid-stream: capture it, surface as Err.
+                Err(e) => {
+                    stream_error = Some(e);
+                    break;
+                }
+            };
             match response_event(resp) {
                 // `let _ =` on send: if the receiver was dropped we keep
                 // accumulating output for `wait()` (only the live channel closes).
@@ -216,17 +231,23 @@ pub(crate) async fn open_handle(
                 _ => {}
             }
         }
-        // If the stream ended/errored without an EndEvent, surface that rather
-        // than reporting a clean exit_code 0.
-        if !got_end && error.is_none() {
-            error = Some("process stream closed before the end event".to_string());
-        }
-        let _ = result_tx.send(CommandResult {
-            exit_code,
-            error,
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr).into_owned(),
-        });
+        let outcome = if let Some(e) = stream_error {
+            // A genuine transport/RPC failure mid-stream propagates as `Err`.
+            Err(e)
+        } else {
+            // Clean close without an EndEvent: report it in the result rather
+            // than as a clean exit_code 0.
+            if !got_end && error.is_none() {
+                error = Some("process stream closed before the end event".to_string());
+            }
+            Ok(CommandResult {
+                exit_code,
+                error,
+                stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            })
+        };
+        let _ = result_tx.send(outcome);
     });
 
     Ok(CommandHandle {
@@ -354,5 +375,48 @@ mod tests {
         .expect("handle");
         let result = handle.wait().await.expect("result");
         assert!(result.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn mid_stream_transport_error_propagates_as_err() {
+        // Start event, then an end-stream ERROR frame (a transport/RPC failure):
+        // wait() must return Err, not Ok with a generic message.
+        let server = MockServer::start().await;
+        let mut body = encode_envelope(0, br#"{"event":{"start":{"pid":3}}}"#);
+        body.extend(encode_envelope(
+            FLAG_END_STREAM,
+            br#"{"error":{"code":"not_found","message":"gone"}}"#,
+        ));
+        Mock::given(method("POST"))
+            .and(path("/process.Process/Start"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/connect+json")
+                    .set_body_bytes(body),
+            )
+            .mount(&server)
+            .await;
+        let req = crate::envd::proto::process::StartRequest {
+            process: Some(crate::envd::proto::process::ProcessConfig {
+                cmd: "/bin/bash".to_string(),
+                args: vec!["-l".to_string(), "-c".to_string(), "x".to_string()],
+                envs: Default::default(),
+                cwd: None,
+            }),
+            pty: None,
+            tag: None,
+            stdin: Some(false),
+        };
+        let handle = open_handle(
+            connect_for(&server),
+            crate::connect::PROC_START,
+            &req,
+            None,
+            "0.6.3",
+        )
+        .await
+        .expect("handle");
+        let err = handle.wait().await.expect_err("transport error");
+        assert!(matches!(err, Error::NotFound(_)));
     }
 }

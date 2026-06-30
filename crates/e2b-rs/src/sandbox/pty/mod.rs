@@ -113,7 +113,9 @@ impl Pty {
                 }),
             }),
             tag: None,
-            stdin: Some(true),
+            // JS omits `stdin` for a pty (its I/O flows through the pty master),
+            // so leave it unset for 1:1 wire parity.
+            stdin: None,
         };
         open_handle(
             Arc::clone(&self.connect),
