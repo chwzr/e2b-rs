@@ -186,15 +186,16 @@ pub(crate) async fn open_handle(
         let mut stderr: Vec<u8> = Vec::new();
         let mut exit_code: i32 = 0;
         let mut error: Option<String> = None;
+        let mut got_end = false;
         while let Some(item) = stream.next().await {
-            let Ok(resp) = item else { break }; // stream error ends the command
+            let Ok(resp) = item else { break }; // stream error: break, flagged below
             match response_event(resp) {
+                // `let _ =` on send: if the receiver was dropped we keep
+                // accumulating output for `wait()` (only the live channel closes).
                 Some(ProcEvent::Data(d)) => match d.output {
                     Some(DataOutput::Stdout(b)) => {
                         stdout.extend_from_slice(&b);
-                        if output_tx.send(CommandOutput::Stdout(b)).await.is_err() {
-                            // receiver dropped; keep accumulating for wait()
-                        }
+                        let _ = output_tx.send(CommandOutput::Stdout(b)).await;
                     }
                     Some(DataOutput::Stderr(b)) => {
                         stderr.extend_from_slice(&b);
@@ -208,11 +209,17 @@ pub(crate) async fn open_handle(
                 Some(ProcEvent::End(end)) => {
                     exit_code = end.exit_code;
                     error = end.error;
+                    got_end = true;
                     break;
                 }
                 // Start (already consumed) + KeepAlive are not surfaced.
                 _ => {}
             }
+        }
+        // If the stream ended/errored without an EndEvent, surface that rather
+        // than reporting a clean exit_code 0.
+        if !got_end && error.is_none() {
+            error = Some("process stream closed before the end event".to_string());
         }
         let _ = result_tx.send(CommandResult {
             exit_code,
@@ -307,5 +314,45 @@ mod tests {
         let result = handle.wait().await.expect("result");
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.stdout, "hi");
+    }
+
+    #[tokio::test]
+    async fn stream_closing_before_end_event_is_reported() {
+        // Start event, then the stream closes with NO end event — wait() must
+        // surface an error rather than reporting a clean exit_code 0.
+        let server = MockServer::start().await;
+        let mut body = encode_envelope(0, br#"{"event":{"start":{"pid":1}}}"#);
+        body.extend(encode_envelope(FLAG_END_STREAM, b"{}"));
+        Mock::given(method("POST"))
+            .and(path("/process.Process/Start"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/connect+json")
+                    .set_body_bytes(body),
+            )
+            .mount(&server)
+            .await;
+        let req = crate::envd::proto::process::StartRequest {
+            process: Some(crate::envd::proto::process::ProcessConfig {
+                cmd: "/bin/bash".to_string(),
+                args: vec!["-l".to_string(), "-c".to_string(), "x".to_string()],
+                envs: Default::default(),
+                cwd: None,
+            }),
+            pty: None,
+            tag: None,
+            stdin: Some(false),
+        };
+        let handle = open_handle(
+            connect_for(&server),
+            crate::connect::PROC_START,
+            &req,
+            None,
+            "0.6.3",
+        )
+        .await
+        .expect("handle");
+        let result = handle.wait().await.expect("result");
+        assert!(result.error.is_some());
     }
 }
