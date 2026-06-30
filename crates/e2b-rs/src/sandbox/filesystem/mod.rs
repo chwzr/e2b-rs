@@ -389,6 +389,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn write_files_ignores_gzip_no_octet_gate_on_old_envd() {
+        // write_files is always multipart; a stray gzip flag must NOT trip the
+        // octet-stream version gate (it would on `write`).
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "name": "a.txt", "type": "FILE_TYPE_FILE", "path": "/a.txt", "metadata": {} }
+            ])))
+            .mount(&server)
+            .await;
+        let config = ConnectionConfig::new(ConnectionConfigOpts::default());
+        // 0.5.0 < 0.5.7 octet floor — a gated `write(gzip)` would error here.
+        let fs = Filesystem::build_with_base_url(server.uri(), "sbx", "0.5.0", None, &config)
+            .expect("fs");
+        let opts = crate::sandbox::filesystem::FsWriteOpts {
+            gzip: true,
+            ..Default::default()
+        };
+        let entries = vec![crate::sandbox::filesystem::WriteEntry {
+            path: "/a.txt".to_string(),
+            data: b"hi".to_vec(),
+        }];
+        let out = fs.write_files(entries, opts).await.expect("write_files");
+        assert_eq!(out.len(), 1);
+    }
+
+    #[tokio::test]
     async fn rename_sends_source_then_destination() {
         let server = MockServer::start().await;
         // Locks the source/destination ordering (old_path -> source, new_path -> destination).

@@ -97,17 +97,17 @@ impl Filesystem {
         Ok(resp.bytes_stream().map(|chunk| chunk.map_err(Error::from)))
     }
 
-    /// Common write path: build metadata headers (with version gating) and
-    /// validate metadata keys/values.
-    fn write_headers(&self, opts: &FsWriteOpts) -> Result<Vec<(String, String)>> {
+    /// Common write path: validate metadata + build the `X-Metadata-*` headers,
+    /// applying the relevant version gates. `use_octet` is whether THIS request
+    /// will actually use the octet-stream encoding (so the octet gate doesn't
+    /// fire for a multipart write that merely carried a `gzip` flag).
+    fn write_headers(&self, opts: &FsWriteOpts, use_octet: bool) -> Result<Vec<(String, String)>> {
         if !opts.metadata.is_empty() && !version_gte(&self.envd_version, ENVD_FILE_METADATA) {
             return Err(Error::Template(format!(
                 "File metadata requires a newer template (envd >= {ENVD_FILE_METADATA})"
             )));
         }
-        if (opts.gzip || opts.use_octet_stream == Some(true))
-            && !version_gte(&self.envd_version, ENVD_OCTET_STREAM_UPLOAD)
-        {
+        if use_octet && !version_gte(&self.envd_version, ENVD_OCTET_STREAM_UPLOAD) {
             return Err(Error::Template(format!(
                 "Octet-stream upload requires a newer template (envd >= {ENVD_OCTET_STREAM_UPLOAD})"
             )));
@@ -127,10 +127,10 @@ impl Filesystem {
         data: impl Into<Vec<u8>>,
         opts: FsWriteOpts,
     ) -> Result<WriteInfo> {
-        let headers = self.write_headers(&opts)?;
+        let use_octet = opts.use_octet_stream.unwrap_or(opts.gzip);
+        let headers = self.write_headers(&opts, use_octet)?;
         let user = self.resolve_user(opts.user.as_deref());
         let data = data.into();
-        let use_octet = opts.use_octet_stream.unwrap_or(opts.gzip);
 
         let infos = if use_octet {
             let (body, encoding) = if opts.gzip {
@@ -176,7 +176,9 @@ impl Filesystem {
         if files.is_empty() {
             return Ok(Vec::new());
         }
-        let headers = self.write_headers(&opts)?;
+        // Always multipart; `gzip` is ignored here, so the octet-stream gate
+        // must not fire for it.
+        let headers = self.write_headers(&opts, false)?;
         let user = self.resolve_user(opts.user.as_deref());
         let mut form = reqwest::multipart::Form::new();
         for entry in files {
@@ -188,7 +190,8 @@ impl Filesystem {
         let infos = self
             .rest
             .post_files_multipart(None, user.as_deref(), form, &headers)
-            .await?;
+            .await
+            .map_err(|e| file_not_found_on_missing(e, "(batch write)"))?;
         Ok(infos.into_iter().map(map_write_info).collect())
     }
 }
