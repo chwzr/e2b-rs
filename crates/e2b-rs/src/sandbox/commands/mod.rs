@@ -152,6 +152,87 @@ impl Commands {
     pub async fn run(&self, cmd: &str, opts: CommandStartOpts) -> Result<CommandResult> {
         self.start(cmd, opts).await?.wait().await
     }
+
+    /// List running processes.
+    pub async fn list(&self) -> Result<Vec<ProcessInfo>> {
+        let user = self.default_user.clone();
+        let resp: pb::ListResponse = self
+            .connect
+            .unary(
+                crate::connect::PROC_LIST,
+                &pb::ListRequest {},
+                user.as_deref(),
+            )
+            .await?;
+        Ok(resp
+            .processes
+            .into_iter()
+            .map(ProcessInfo::from_proto)
+            .collect())
+    }
+
+    /// Kill a process by pid (SIGKILL). Returns `false` if it was not found.
+    pub async fn kill(&self, pid: u32) -> Result<bool> {
+        let user = self.default_user.clone();
+        let req = pb::SendSignalRequest {
+            process: Some(pid_selector(pid)),
+            signal: pb::Signal::Sigkill as i32,
+        };
+        match self
+            .connect
+            .unary::<_, pb::SendSignalResponse>(
+                crate::connect::PROC_SEND_SIGNAL,
+                &req,
+                user.as_deref(),
+            )
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(Error::NotFound(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Write bytes to a process's stdin.
+    pub async fn send_stdin(&self, pid: u32, data: &[u8]) -> Result<()> {
+        let user = self.default_user.clone();
+        let req = pb::SendInputRequest {
+            process: Some(pid_selector(pid)),
+            input: Some(pb::ProcessInput {
+                input: Some(pb::process_input::Input::Stdin(data.to_vec())),
+            }),
+        };
+        self.connect
+            .unary::<_, pb::SendInputResponse>(
+                crate::connect::PROC_SEND_INPUT,
+                &req,
+                user.as_deref(),
+            )
+            .await
+            .map(|_| ())
+    }
+
+    /// Close a process's stdin (requires envd >= `ENVD_ENVD_CLOSE`).
+    pub async fn close_stdin(&self, pid: u32) -> Result<()> {
+        if !version_gte(&self.envd_version, crate::envd::versions::ENVD_ENVD_CLOSE) {
+            return Err(Error::Template(format!(
+                "close_stdin requires a newer template (envd >= {})",
+                crate::envd::versions::ENVD_ENVD_CLOSE
+            )));
+        }
+        let user = self.default_user.clone();
+        let req = pb::CloseStdinRequest {
+            process: Some(pid_selector(pid)),
+        };
+        self.connect
+            .unary::<_, pb::CloseStdinResponse>(
+                crate::connect::PROC_CLOSE_STDIN,
+                &req,
+                user.as_deref(),
+            )
+            .await
+            .map(|_| ())
+    }
 }
 
 #[cfg(test)]
@@ -217,5 +298,44 @@ mod tests {
         // Non-zero exit is data, not an error.
         assert_eq!(result.exit_code, 3);
         assert_eq!(result.stdout, "out");
+    }
+
+    #[tokio::test]
+    async fn list_maps_processes() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/process.Process/List"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "processes": [
+                    { "pid": 11, "config": { "cmd": "/bin/bash", "args": ["-l","-c","sleep 1"], "envs": {} } }
+                ]
+            })))
+            .mount(&server)
+            .await;
+        let out = build_with_connect(connect_for(&server), "0.6.3")
+            .list()
+            .await
+            .expect("list");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].pid, 11);
+        assert_eq!(out[0].cmd, "/bin/bash");
+    }
+
+    #[tokio::test]
+    async fn kill_false_on_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/process.Process/SendSignal"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(
+                serde_json::json!({ "code": "not_found", "message": "no such process" }),
+            ))
+            .mount(&server)
+            .await;
+        assert!(
+            !build_with_connect(connect_for(&server), "0.6.3")
+                .kill(99)
+                .await
+                .expect("kill")
+        );
     }
 }
