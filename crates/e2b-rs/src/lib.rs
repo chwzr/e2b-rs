@@ -141,10 +141,11 @@ pub mod volume;
 pub mod template;
 
 pub use template::{
-    BuildHandle, BuildInfo, BuildOptions, BuildStatus, BuildStatusReason, CopyItem, Instruction,
-    InstructionType, LogEntry, LogEntryLevel, ReadyCmd, RegistryConfig, Template, TemplateApiOpts,
-    TemplateBuildStatusResponse, TemplateTag, TemplateTagInfo, wait_for_file, wait_for_port,
-    wait_for_process, wait_for_timeout, wait_for_url,
+    BuildHandle, BuildInfo, BuildOptions, BuildStatus, BuildStatusReason, CopyItem, CopyOpts,
+    Instruction, InstructionType, LogEntry, LogEntryLevel, MakeDirOpts, MakeSymlinkOpts, ReadyCmd,
+    RegistryConfig, RemoveOpts, RenameOpts, Template, TemplateApiOpts, TemplateBuildStatusResponse,
+    TemplateTag, TemplateTagInfo, wait_for_file, wait_for_port, wait_for_process, wait_for_timeout,
+    wait_for_url,
 };
 
 pub(crate) mod api;

@@ -181,6 +181,90 @@ impl std::fmt::Debug for BuildOptions {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// File-op builder option structs
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Options for the [`Template::copy`] builder method.
+///
+/// All fields are optional and default to `None` / `false`. Construct with
+/// `Default::default()` or use struct-update syntax:
+///
+/// ```rust
+/// use e2b_rs::template::CopyOpts;
+/// let opts = CopyOpts { user: Some("myuser".to_string()), ..Default::default() };
+/// ```
+#[derive(Default, Clone)]
+pub struct CopyOpts {
+    /// If `true`, forces the file-upload step even when the content hash
+    /// matches the server-side cache.
+    pub force_upload: Option<bool>,
+    /// User (and optionally group) for the copied files, e.g. `"user:group"`.
+    /// Passed verbatim to the build backend's `--chown` equivalent.
+    pub user: Option<String>,
+    /// Unix file permission bits for the copied files (e.g. `0o755`).
+    /// Serialised as a zero-padded four-digit octal string (`"0755"`).
+    pub mode: Option<u32>,
+    /// Whether to resolve symbolic links in source paths before copying.
+    /// When `true`, the target of the symlink is hashed instead of the link
+    /// itself.
+    pub resolve_symlinks: Option<bool>,
+}
+
+/// Options for the [`Template::remove`] builder method.
+///
+/// Controls the flags passed to `rm` and the user under which the command
+/// is executed.
+#[derive(Default, Clone)]
+pub struct RemoveOpts {
+    /// If `true`, pass `-f` to `rm` (suppress errors for non-existent files).
+    pub force: bool,
+    /// If `true`, pass `-r` to `rm` (remove directories recursively).
+    pub recursive: bool,
+    /// Run the `rm` command as this user inside the build sandbox.
+    pub user: Option<String>,
+}
+
+/// Options for the [`Template::rename`] builder method.
+///
+/// Controls the flags passed to `mv` and the user under which the command
+/// is executed.
+#[derive(Default, Clone)]
+pub struct RenameOpts {
+    /// If `true`, pass `-f` to `mv` (overwrite the destination without
+    /// prompting).
+    pub force: bool,
+    /// Run the `mv` command as this user inside the build sandbox.
+    pub user: Option<String>,
+}
+
+/// Options for the [`Template::make_dir`] builder method.
+///
+/// Controls the permission mode and the user under which the command is
+/// executed.
+#[derive(Default, Clone)]
+pub struct MakeDirOpts {
+    /// Run the `mkdir` command as this user inside the build sandbox.
+    pub user: Option<String>,
+    /// Unix file permission bits for the created directory (e.g. `0o755`).
+    /// Serialised as a zero-padded four-digit octal string and passed via
+    /// `-m <mode>` to `mkdir`.
+    pub mode: Option<u32>,
+}
+
+/// Options for the [`Template::make_symlink`] builder method.
+///
+/// Controls the flags passed to `ln` and the user under which the command
+/// is executed.
+#[derive(Default, Clone)]
+pub struct MakeSymlinkOpts {
+    /// If `true`, pass `-f` to `ln` (remove the destination before creating
+    /// the link).
+    pub force: bool,
+    /// Run the `ln` command as this user inside the build sandbox.
+    pub user: Option<String>,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Template
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -616,6 +700,233 @@ impl Template {
         Ok(info)
     }
 
+    // ── File-op builder methods ───────────────────────────────────────────────
+
+    /// Copy a single source file or directory into the template image.
+    ///
+    /// `src` must be a relative path within the build context directory.
+    /// Absolute paths and paths that escape the context via `..` return
+    /// [`crate::errors::Error::InvalidArgument`].
+    ///
+    /// The resulting `COPY` instruction is appended with args
+    /// `[src, dest, user, mode_octal]`, matching the shape consumed by the
+    /// upload layer in Plan 5c.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::InvalidArgument`] when `src` is absolute or
+    /// escapes the context directory.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, CopyOpts};
+    ///
+    /// # fn main() -> e2b_rs::Result<()> {
+    /// let t = Template::new()
+    ///     .copy("app.js", "/app/app.js", CopyOpts { user: Some("appuser".to_string()), ..Default::default() })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn copy(mut self, src: &str, dest: &str, opts: CopyOpts) -> crate::errors::Result<Self> {
+        crate::template::files::validate_relative_path(src)?;
+        self.instructions.push(crate::template::types::Instruction {
+            instruction_type: crate::template::types::InstructionType::Copy,
+            args: vec![
+                src.to_string(),
+                dest.to_string(),
+                opts.user.clone().unwrap_or_default(),
+                opts.mode.map(pad_octal).unwrap_or_default(),
+            ],
+            force: opts.force_upload.unwrap_or(false) || self.force,
+            force_upload: opts.force_upload,
+            files_hash: None,
+            resolve_symlinks: opts.resolve_symlinks.unwrap_or(false),
+        });
+        Ok(self)
+    }
+
+    /// Copy multiple source items into the template image in a single call.
+    ///
+    /// Iterates over `items` and, for each [`crate::template::types::CopyItem`],
+    /// iterates over its `src` paths and validates + pushes a `COPY`
+    /// instruction for each. Validation rules are the same as [`Template::copy`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::InvalidArgument`] when any source path is
+    /// absolute or escapes the context directory. Processing stops at the
+    /// first invalid path.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// use e2b_rs::CopyItem;
+    ///
+    /// # fn main() -> e2b_rs::Result<()> {
+    /// let t = Template::new().copy_items(vec![
+    ///     CopyItem { src: vec!["src/main.rs".to_string()], dest: "/app/main.rs".to_string(), ..Default::default() },
+    /// ])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn copy_items(
+        mut self,
+        items: Vec<crate::template::types::CopyItem>,
+    ) -> crate::errors::Result<Self> {
+        for item in items {
+            for src in &item.src {
+                crate::template::files::validate_relative_path(src)?;
+                self.instructions.push(crate::template::types::Instruction {
+                    instruction_type: crate::template::types::InstructionType::Copy,
+                    args: vec![
+                        src.clone(),
+                        item.dest.clone(),
+                        item.user.clone().unwrap_or_default(),
+                        item.mode.map(pad_octal).unwrap_or_default(),
+                    ],
+                    force: item.force_upload.unwrap_or(false) || self.force,
+                    force_upload: item.force_upload,
+                    files_hash: None,
+                    resolve_symlinks: item.resolve_symlinks,
+                });
+            }
+        }
+        Ok(self)
+    }
+
+    /// Remove files or directories inside the template image.
+    ///
+    /// Builds `rm [-r] [-f] <quoted-paths>` and pushes it as a `RUN`
+    /// instruction. Flags are added in the order `-r` then `-f` to match the
+    /// JavaScript SDK's `remove` implementation.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, RemoveOpts};
+    ///
+    /// let t = Template::new()
+    ///     .remove(&["/tmp/cache"], RemoveOpts { recursive: true, ..Default::default() });
+    /// ```
+    pub fn remove(mut self, paths: &[&str], opts: RemoveOpts) -> Self {
+        let mut parts = vec!["rm".to_string()];
+        if opts.recursive {
+            parts.push("-r".to_string());
+        }
+        if opts.force {
+            parts.push("-f".to_string());
+        }
+        for p in paths {
+            parts.push(crate::utils::shell_quote(p));
+        }
+        let cmd = parts.join(" ");
+        self.push_run(cmd, opts.user);
+        self
+    }
+
+    /// Rename or move a file inside the template image.
+    ///
+    /// Builds `mv <quoted-src> <quoted-dest> [-f]` and pushes it as a `RUN`
+    /// instruction. Mirrors the JavaScript SDK's `rename` (line 659).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, RenameOpts};
+    ///
+    /// let t = Template::new()
+    ///     .rename("old.txt", "new.txt", RenameOpts::default());
+    /// ```
+    pub fn rename(mut self, src: &str, dest: &str, opts: RenameOpts) -> Self {
+        let mut parts = vec![
+            "mv".to_string(),
+            crate::utils::shell_quote(src),
+            crate::utils::shell_quote(dest),
+        ];
+        if opts.force {
+            parts.push("-f".to_string());
+        }
+        let cmd = parts.join(" ");
+        self.push_run(cmd, opts.user);
+        self
+    }
+
+    /// Create one or more directories inside the template image.
+    ///
+    /// Builds `mkdir -p [-m <mode>] <quoted-paths>` and pushes it as a `RUN`
+    /// instruction. Mirrors the JavaScript SDK's `makeDir` (line 673).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, MakeDirOpts};
+    ///
+    /// let t = Template::new()
+    ///     .make_dir(&["/app/logs"], MakeDirOpts { mode: Some(0o755), ..Default::default() });
+    /// ```
+    pub fn make_dir(mut self, paths: &[&str], opts: MakeDirOpts) -> Self {
+        let mut parts = vec!["mkdir".to_string(), "-p".to_string()];
+        if let Some(mode) = opts.mode {
+            parts.push(format!("-m {}", pad_octal(mode)));
+        }
+        for p in paths {
+            parts.push(crate::utils::shell_quote(p));
+        }
+        let cmd = parts.join(" ");
+        self.push_run(cmd, opts.user);
+        self
+    }
+
+    /// Create a symbolic link inside the template image.
+    ///
+    /// Builds `ln -s [-f] <quoted-src> <quoted-dest>` and pushes it as a
+    /// `RUN` instruction. Mirrors the JavaScript SDK's `makeSymlink`
+    /// (line 688).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, MakeSymlinkOpts};
+    ///
+    /// let t = Template::new()
+    ///     .make_symlink("/usr/local/bin/node", "/usr/bin/node", MakeSymlinkOpts::default());
+    /// ```
+    pub fn make_symlink(mut self, src: &str, dest: &str, opts: MakeSymlinkOpts) -> Self {
+        let mut parts = vec!["ln".to_string(), "-s".to_string()];
+        if opts.force {
+            parts.push("-f".to_string());
+        }
+        parts.push(crate::utils::shell_quote(src));
+        parts.push(crate::utils::shell_quote(dest));
+        let cmd = parts.join(" ");
+        self.push_run(cmd, opts.user);
+        self
+    }
+
+    // ── Private run-instruction helper ────────────────────────────────────────
+
+    /// Push a `RUN` instruction.
+    ///
+    /// `cmd` becomes `args[0]`; `user`, if present, becomes `args[1]`.
+    /// The instruction's `force` flag is inherited from `self.force` (i.e.
+    /// the template-level skip-cache setting).
+    fn push_run(&mut self, cmd: String, user: Option<String>) {
+        let mut args = vec![cmd];
+        if let Some(u) = user {
+            args.push(u);
+        }
+        self.instructions.push(crate::template::types::Instruction {
+            instruction_type: crate::template::types::InstructionType::Run,
+            args,
+            force: self.force,
+            force_upload: None,
+            files_hash: None,
+            resolve_symlinks: false,
+        });
+    }
+
     /// Shared setup for [`Template::build`] and [`Template::build_in_background`].
     ///
     /// Performs steps 1–8 of the build pipeline:
@@ -791,6 +1102,21 @@ fn instruction_type_str(ty: InstructionType) -> String {
         InstructionType::Workdir => "WORKDIR".to_string(),
         InstructionType::User => "USER".to_string(),
     }
+}
+
+/// Format a Unix permission mode as a zero-padded four-digit octal string.
+///
+/// Port of the JavaScript SDK's `padOctal` (`utils.ts:352`):
+/// `mode.toString(8).padStart(4, '0')`.
+///
+/// # Example
+///
+/// ```text
+/// pad_octal(0o755) // "0755"
+/// pad_octal(0o644) // "0644"
+/// ```
+fn pad_octal(mode: u32) -> String {
+    format!("{mode:04o}")
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1341,6 +1667,235 @@ CMD npm start
             }
             other => panic!("expected RegistryConfig::Gcp, got {other:?}"),
         }
+    }
+
+    // ── File-op builder method tests ─────────────────────────────────────────
+
+    #[test]
+    fn copy_pushes_copy_instruction() {
+        let t = Template::new()
+            .copy(
+                "app.js",
+                "/app/app.js",
+                CopyOpts {
+                    user: Some("me".to_string()),
+                    mode: Some(0o755),
+                    force_upload: Some(true),
+                    resolve_symlinks: Some(true),
+                },
+            )
+            .expect("valid relative src");
+
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(
+            instr.instruction_type,
+            crate::template::types::InstructionType::Copy
+        );
+        // args: [src, dest, user, mode_octal]
+        assert_eq!(instr.args, vec!["app.js", "/app/app.js", "me", "0755"]);
+        // force_upload propagated
+        assert_eq!(instr.force_upload, Some(true));
+        // force: force_upload=true || self.force=false → true
+        assert!(instr.force);
+        // resolve_symlinks propagated
+        assert!(instr.resolve_symlinks);
+    }
+
+    #[test]
+    fn copy_pushes_default_user_and_mode_as_empty_strings() {
+        let t = Template::new()
+            .copy("src/lib.rs", "/app/lib.rs", CopyOpts::default())
+            .expect("valid relative src");
+
+        let instr = &t.instructions[0];
+        // user and mode default to empty string
+        assert_eq!(instr.args, vec!["src/lib.rs", "/app/lib.rs", "", ""]);
+        assert_eq!(instr.force_upload, None);
+        assert!(!instr.force);
+        assert!(!instr.resolve_symlinks);
+    }
+
+    #[test]
+    fn copy_rejects_absolute_src() {
+        let result = Template::new().copy("/absolute/path", "/dest", CopyOpts::default());
+        assert!(result.is_err(), "absolute src path must return Err");
+    }
+
+    #[test]
+    fn copy_rejects_escaping_src() {
+        let result = Template::new().copy("../escape", "/dest", CopyOpts::default());
+        assert!(result.is_err(), "../escape must return Err");
+    }
+
+    #[test]
+    fn copy_items_pushes_one_instruction_per_src() {
+        let items = vec![crate::template::types::CopyItem {
+            src: vec!["a.txt".to_string(), "b.txt".to_string()],
+            dest: "/app/".to_string(),
+            user: Some("u".to_string()),
+            mode: Some(0o644),
+            force_upload: None,
+            resolve_symlinks: false,
+        }];
+        let t = Template::new().copy_items(items).expect("valid copy items");
+
+        assert_eq!(t.instructions.len(), 2, "one instruction per src path");
+        assert_eq!(t.instructions[0].args[0], "a.txt");
+        assert_eq!(t.instructions[1].args[0], "b.txt");
+        assert_eq!(t.instructions[0].args[3], "0644");
+    }
+
+    #[test]
+    fn copy_items_rejects_absolute_src() {
+        let items = vec![crate::template::types::CopyItem {
+            src: vec!["/bad".to_string()],
+            dest: "/app/".to_string(),
+            ..Default::default()
+        }];
+        assert!(Template::new().copy_items(items).is_err());
+    }
+
+    #[test]
+    fn remove_builds_rm() {
+        let t = Template::new().remove(
+            &["a", "b c"],
+            RemoveOpts {
+                recursive: true,
+                force: true,
+                user: Some("root".to_string()),
+            },
+        );
+
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(
+            instr.instruction_type,
+            crate::template::types::InstructionType::Run
+        );
+        // rm -r -f a 'b c'
+        assert_eq!(instr.args[0], "rm -r -f a 'b c'");
+        // user in args[1]
+        assert_eq!(instr.args.get(1).map(String::as_str), Some("root"));
+    }
+
+    #[test]
+    fn remove_no_flags_no_user() {
+        let t = Template::new().remove(&["file.txt"], RemoveOpts::default());
+        assert_eq!(t.instructions[0].args[0], "rm file.txt");
+        assert_eq!(t.instructions[0].args.len(), 1);
+    }
+
+    #[test]
+    fn rename_builds_mv() {
+        // No force: mv <src> <dest>
+        let t = Template::new().rename("old.txt", "new.txt", RenameOpts::default());
+        assert_eq!(t.instructions[0].args[0], "mv old.txt new.txt");
+
+        // With force: mv <src> <dest> -f  (JS SDK appends -f after operands)
+        let t2 = Template::new().rename(
+            "old.txt",
+            "new.txt",
+            RenameOpts {
+                force: true,
+                user: Some("admin".to_string()),
+            },
+        );
+        assert_eq!(t2.instructions[0].args[0], "mv old.txt new.txt -f");
+        assert_eq!(
+            t2.instructions[0].args.get(1).map(String::as_str),
+            Some("admin")
+        );
+    }
+
+    #[test]
+    fn rename_shell_quotes_paths_with_spaces() {
+        let t = Template::new().rename("my file.txt", "my new.txt", RenameOpts::default());
+        assert_eq!(t.instructions[0].args[0], "mv 'my file.txt' 'my new.txt'");
+    }
+
+    #[test]
+    fn make_dir_builds_mkdir() {
+        // With mode
+        let t = Template::new().make_dir(
+            &["/app/logs"],
+            MakeDirOpts {
+                mode: Some(0o755),
+                user: None,
+            },
+        );
+        assert_eq!(t.instructions[0].args[0], "mkdir -p -m 0755 /app/logs");
+
+        // Without mode
+        let t2 = Template::new().make_dir(&["/app/data", "/tmp/work"], MakeDirOpts::default());
+        assert_eq!(t2.instructions[0].args[0], "mkdir -p /app/data /tmp/work");
+    }
+
+    #[test]
+    fn make_dir_with_user() {
+        let t = Template::new().make_dir(
+            &["/home/user"],
+            MakeDirOpts {
+                user: Some("deployer".to_string()),
+                mode: None,
+            },
+        );
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("deployer")
+        );
+    }
+
+    #[test]
+    fn make_symlink_builds_ln() {
+        // No force: ln -s <src> <dest>
+        let t = Template::new().make_symlink("target", "link", MakeSymlinkOpts::default());
+        assert_eq!(t.instructions[0].args[0], "ln -s target link");
+
+        // With force: ln -s -f <src> <dest>
+        let t2 = Template::new().make_symlink(
+            "target",
+            "link",
+            MakeSymlinkOpts {
+                force: true,
+                user: Some("www".to_string()),
+            },
+        );
+        assert_eq!(t2.instructions[0].args[0], "ln -s -f target link");
+        assert_eq!(
+            t2.instructions[0].args.get(1).map(String::as_str),
+            Some("www")
+        );
+    }
+
+    #[test]
+    fn make_symlink_shell_quotes() {
+        let t = Template::new().make_symlink(
+            "/usr/local/bin/my app",
+            "/usr/bin/my app",
+            MakeSymlinkOpts::default(),
+        );
+        assert_eq!(
+            t.instructions[0].args[0],
+            "ln -s '/usr/local/bin/my app' '/usr/bin/my app'"
+        );
+    }
+
+    #[test]
+    fn push_run_inherits_template_force_flag() {
+        let t = Template::new()
+            .skip_cache()
+            .remove(&["tmp"], RemoveOpts::default());
+        // force is inherited from template.force = true
+        assert!(t.instructions[0].force);
+    }
+
+    #[test]
+    fn pad_octal_formats_correctly() {
+        assert_eq!(pad_octal(0o755), "0755");
+        assert_eq!(pad_octal(0o644), "0644");
+        assert_eq!(pad_octal(0o000), "0000");
+        assert_eq!(pad_octal(0o4755), "4755"); // setuid bit
     }
 
     // ── default cpu/mem defaults (Fix 2) ──────────────────────────────────────
