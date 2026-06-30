@@ -175,7 +175,7 @@ mod tests {
 
     use crate::api::client::ApiClient;
     use crate::connection_config::{ConnectionConfig, ConnectionConfigOpts};
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{body_bytes, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn api_client_for(server: &MockServer) -> ApiClient {
@@ -245,6 +245,7 @@ mod tests {
         Mock::given(method("PUT"))
             .and(path("/upload/presigned"))
             .and(header("content-length", expected_len.to_string().as_str()))
+            .and(body_bytes(body_content.to_vec()))
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;

@@ -136,6 +136,7 @@ mod tests {
         let mut archive = tar::Archive::new(gz);
 
         let mut entries: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut raw_count = 0usize;
         for entry_result in archive.entries().expect("iterate entries") {
             let mut entry = entry_result.expect("read entry");
             let name = entry
@@ -146,7 +147,18 @@ mod tests {
             let mut content = Vec::new();
             entry.read_to_end(&mut content).expect("read entry content");
             entries.insert(name, content);
+            raw_count += 1;
         }
+
+        // No duplicate archive entries: the raw iterated count must equal the
+        // deduplicated key count. A double-recursion bug (e.g. `sub/b.txt`
+        // appended twice) would make `raw_count > entries.len()`.
+        assert_eq!(
+            raw_count,
+            entries.len(),
+            "archive must not contain duplicate entries (raw {raw_count} vs unique {})",
+            entries.len()
+        );
 
         assert!(entries.contains_key("a.txt"), "a.txt must be in archive");
         assert_eq!(
@@ -167,10 +179,10 @@ mod tests {
         );
     }
 
-    /// Calling `tar_file_stream` on a non-matching glob returns an error (no
-    /// files matched, propagated from `get_all_files_in_path` via the empty-list
-    /// check in `calculate_files_hash`).  Here we verify the happy path also
-    /// produces a positive size when files exist.
+    /// Sanity check that `tar_file_stream` produces a non-zero archive when
+    /// files are present. (`tar_file_stream` does not error on an empty file
+    /// list — gzip/tar framing always yields a positive size; the empty-list
+    /// check lives in `calculate_files_hash`, not here.)
     #[test]
     fn tar_size_is_positive_for_nonempty_tree() {
         let dir = tempfile::tempdir().expect("tempdir");
