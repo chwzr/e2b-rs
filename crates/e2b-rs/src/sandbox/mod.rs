@@ -3,6 +3,7 @@
 
 pub(crate) mod api;
 pub(crate) mod mcp_gen;
+pub mod network;
 pub mod opts;
 pub(crate) mod paginator;
 #[allow(clippy::module_inception)] // `sandbox.rs` inside the `sandbox` module is intentional
@@ -11,6 +12,7 @@ pub mod signature;
 pub(crate) mod snapshot_paginator;
 pub mod types;
 
+pub use network::{NetworkRule, SandboxNetworkUpdate};
 pub use opts::{SandboxConnectOpts, SandboxCreateOpts, SandboxListOpts, SnapshotListOpts};
 pub use paginator::SandboxPaginator;
 pub use sandbox::{Sandbox, SandboxConnectBuilder, SandboxCreateBuilder};

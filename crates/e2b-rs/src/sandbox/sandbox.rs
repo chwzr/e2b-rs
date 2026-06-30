@@ -160,6 +160,18 @@ impl Sandbox {
         crate::sandbox::paginator::SandboxPaginator::new(opts)
     }
 
+    /// Atomically replace the sandbox's egress network policy.
+    ///
+    /// Note: this REPLACES the policy — fields left empty clear the
+    /// corresponding server-side rules (no merge). A `409` here means the
+    /// sandbox is paused (resume it first).
+    pub async fn update_network(
+        &self,
+        update: crate::sandbox::network::SandboxNetworkUpdate,
+    ) -> Result<()> {
+        api::update_sandbox_network(&self.api, &self.sandbox_id, &update.to_wire_body()).await
+    }
+
     /// Build a `Sandbox` from a `create`/`connect` response (the lean
     /// `api::schema::Sandbox`) plus the resolved config/client.
     fn from_api_sandbox(

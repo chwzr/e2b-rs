@@ -205,6 +205,17 @@ pub(crate) async fn set_sandbox_timeout(
         .await
 }
 
+/// Replace a sandbox's network policy. `PUT /sandboxes/{id}/network` (204).
+pub(crate) async fn update_sandbox_network(
+    api: &ApiClient,
+    sandbox_id: &str,
+    body: &serde_json::Value,
+) -> Result<()> {
+    let path = format!("/sandboxes/{sandbox_id}/network");
+    api.request_unit(reqwest::Method::PUT, &path, &[], Some(body))
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +440,22 @@ mod tests {
             .expect("metrics");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].cpu_count, 2);
+    }
+
+    #[tokio::test]
+    async fn update_network_puts_config() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/sandboxes/sbx_n/network"))
+            .and(body_partial_json(
+                serde_json::json!({ "allowOut": ["1.1.1.1"] }),
+            ))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let body = serde_json::json!({ "allowOut": ["1.1.1.1"], "denyOut": [], "rules": {} });
+        update_sandbox_network(&api_for(&server), "sbx_n", &body)
+            .await
+            .expect("update network");
     }
 }
