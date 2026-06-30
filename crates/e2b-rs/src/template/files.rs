@@ -160,14 +160,15 @@ pub(crate) fn get_all_files_in_path(
             // Include the directory entry itself.
             files.insert(path.clone());
 
-            // Walk and include all nested entries.
-            for walk_entry in WalkDir::new(&path)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .skip(1)
+            // Walk and include all nested entries. Propagate traversal
+            // errors (e.g. permission-denied on a subdirectory) rather than
+            // swallowing them — a silently truncated file list would produce
+            // a wrong (incomplete) cache hash, not an error.
+            for walk_result in WalkDir::new(&path).follow_links(false).into_iter().skip(1)
             // the root dir is already inserted above
             {
+                let walk_entry = walk_result
+                    .map_err(|e| Error::Internal(format!("directory traversal error: {e}")))?;
                 let entry_path = walk_entry.path().to_path_buf();
                 let entry_rel = entry_path
                     .strip_prefix(context)
