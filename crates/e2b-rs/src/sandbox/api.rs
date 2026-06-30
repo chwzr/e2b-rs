@@ -151,6 +151,35 @@ pub(crate) async fn get_sandbox_metrics(
     api.request(reqwest::Method::GET, &path, &query, None).await
 }
 
+/// Create a snapshot of a sandbox. `POST /sandboxes/{id}/snapshots` → `SnapshotInfo`.
+pub(crate) async fn create_snapshot(
+    api: &ApiClient,
+    sandbox_id: &str,
+    name: Option<&str>,
+) -> Result<api_schema::SnapshotInfo> {
+    let mut body = serde_json::json!({});
+    if let Some(name) = name {
+        body["name"] = serde_json::Value::String(name.to_string());
+    }
+    let path = format!("/sandboxes/{sandbox_id}/snapshots");
+    api.request(reqwest::Method::POST, &path, &[], Some(&body))
+        .await
+}
+
+/// Delete a snapshot (a snapshot is a template). `DELETE /templates/{id}`;
+/// `false` if it was not found.
+pub(crate) async fn delete_snapshot(api: &ApiClient, snapshot_id: &str) -> Result<bool> {
+    let path = format!("/templates/{snapshot_id}");
+    match api
+        .request_unit(reqwest::Method::DELETE, &path, &[], None)
+        .await
+    {
+        Ok(()) => Ok(true),
+        Err(Error::NotFound(_)) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// Set the sandbox timeout (from now).
 pub(crate) async fn set_sandbox_timeout(
     api: &ApiClient,
@@ -314,6 +343,40 @@ mod tests {
             !pause_sandbox(&api_for(&server), "sbx_p", true)
                 .await
                 .expect("pause idempotent")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_snapshot_returns_info() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sandboxes/sbx_s/snapshots"))
+            .and(body_partial_json(serde_json::json!({ "name": "snap-a" })))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(
+                    serde_json::json!({ "snapshotID": "snap_1", "names": ["snap-a"] }),
+                ),
+            )
+            .mount(&server)
+            .await;
+        let info = create_snapshot(&api_for(&server), "sbx_s", Some("snap-a"))
+            .await
+            .expect("snapshot");
+        assert_eq!(info.snapshot_id, "snap_1");
+    }
+
+    #[tokio::test]
+    async fn delete_snapshot_false_on_404() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/templates/snap_gone"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        assert!(
+            !delete_snapshot(&api_for(&server), "snap_gone")
+                .await
+                .expect("delete")
         );
     }
 

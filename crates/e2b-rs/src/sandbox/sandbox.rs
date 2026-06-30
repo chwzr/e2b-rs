@@ -10,7 +10,7 @@ use crate::envd::versions::version_gte;
 use crate::errors::{Error, Result};
 use crate::sandbox::api;
 use crate::sandbox::opts::{SandboxConnectOpts, SandboxCreateOpts};
-use crate::sandbox::types::{SandboxInfo, SandboxMetrics, SandboxState};
+use crate::sandbox::types::{SandboxInfo, SandboxMetrics, SandboxState, SnapshotInfo};
 
 /// A boxed future returned by the lifecycle builders.
 type SandboxFuture = Pin<Box<dyn Future<Output = Result<Sandbox>> + Send>>;
@@ -123,6 +123,23 @@ impl Sandbox {
         }
         let raw = api::get_sandbox_metrics(&self.api, &self.sandbox_id, None, None).await?;
         Ok(raw.into_iter().map(SandboxMetrics::from_metric).collect())
+    }
+
+    /// Create a snapshot of this sandbox. `name` registers (or re-points) a
+    /// template alias for the snapshot.
+    pub async fn create_snapshot(&self, name: Option<String>) -> Result<SnapshotInfo> {
+        let raw = api::create_snapshot(&self.api, &self.sandbox_id, name.as_deref()).await?;
+        Ok(SnapshotInfo::from_schema(raw))
+    }
+
+    /// Delete a snapshot by id. Returns `false` if it was already gone.
+    pub async fn delete_snapshot(
+        snapshot_id: impl Into<String>,
+        connection: crate::connection_config::ConnectionConfigOpts,
+    ) -> Result<bool> {
+        let config = ConnectionConfig::new(connection);
+        let api = ApiClient::new(&config, true)?;
+        api::delete_snapshot(&api, &snapshot_id.into()).await
     }
 
     /// List sandboxes (paginated). Filter by state/metadata via [`crate::SandboxListOpts`].

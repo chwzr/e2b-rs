@@ -69,6 +69,25 @@ impl SandboxInfo {
     }
 }
 
+/// Metadata for a sandbox snapshot (see [`Sandbox::create_snapshot`]).
+#[derive(Debug, Clone)]
+pub struct SnapshotInfo {
+    /// The snapshot's identifier (also usable as a template id).
+    pub snapshot_id: String,
+    /// Template names/aliases this snapshot is registered under.
+    pub names: Vec<String>,
+}
+
+impl SnapshotInfo {
+    /// Map the generated wire type to the public one.
+    pub(crate) fn from_schema(s: crate::api::schema::SnapshotInfo) -> SnapshotInfo {
+        SnapshotInfo {
+            snapshot_id: s.snapshot_id,
+            names: s.names,
+        }
+    }
+}
+
 /// Point-in-time resource usage for a sandbox (see [`Sandbox::get_metrics`]).
 #[derive(Debug, Clone)]
 pub struct SandboxMetrics {
@@ -109,6 +128,17 @@ impl SandboxMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_info_maps_from_generated() {
+        let raw = crate::api::schema::SnapshotInfo {
+            names: vec!["my-snap".to_string()],
+            snapshot_id: "snap_1".to_string(),
+        };
+        let s = SnapshotInfo::from_schema(raw);
+        assert_eq!(s.snapshot_id, "snap_1");
+        assert_eq!(s.names, vec!["my-snap".to_string()]);
+    }
 
     #[test]
     fn metrics_map_from_generated() {
