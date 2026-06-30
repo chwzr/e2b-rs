@@ -2,9 +2,11 @@
 
 pub(crate) mod io;
 pub mod types;
+pub(crate) mod watch;
 
 pub use io::FsWriteOpts;
 pub use types::{EntryInfo, FileType, FilesystemEvent, FilesystemEventType, WriteEntry, WriteInfo};
+pub use watch::{WatchHandle, WatchOpts};
 
 use crate::connect::client::{ConnectClient, ConnectClientOpts};
 use crate::connection_config::{ConnectionConfig, DEFAULT_USERNAME, ENVD_PORT};

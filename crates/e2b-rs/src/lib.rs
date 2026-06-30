@@ -83,7 +83,7 @@ pub use sandbox::{
     NetworkRule, Sandbox, SandboxConnectBuilder, SandboxConnectOpts, SandboxCreateBuilder,
     SandboxCreateOpts, SandboxInfo, SandboxListOpts, SandboxMetrics, SandboxNetworkUpdate,
     SandboxPaginator, SandboxState, SandboxUrlOpts, SnapshotInfo, SnapshotListOpts,
-    SnapshotPaginator, WriteEntry, WriteInfo,
+    SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry, WriteInfo,
 };
 
 pub mod paginator;
