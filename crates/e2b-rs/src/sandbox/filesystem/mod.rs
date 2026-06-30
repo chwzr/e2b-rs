@@ -1,5 +1,6 @@
 //! Filesystem API for sandbox file operations.
 
+pub(crate) mod io;
 pub mod types;
 
 pub use types::{EntryInfo, FileType, FilesystemEvent, FilesystemEventType, WriteEntry, WriteInfo};
@@ -26,7 +27,6 @@ pub struct Filesystem {
     /// Connect-over-JSON client for the envd RPC surface.
     pub(crate) connect: ConnectClient,
     /// REST client for the envd `/files` surface (used by Tasks 3–5).
-    #[allow(dead_code)]
     pub(crate) rest: EnvdApiClient,
     /// envd version string; used by version gates (used by Tasks 3–6).
     #[allow(dead_code)]
@@ -220,6 +220,35 @@ mod tests {
     use crate::connection_config::{ConnectionConfig, ConnectionConfigOpts};
     use wiremock::matchers::{body_partial_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn read_text_and_bytes() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/files"))
+            .and(wiremock::matchers::query_param("path", "/f.txt"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("hello"))
+            .mount(&server)
+            .await;
+        let fs = fs_for(&server);
+        assert_eq!(fs.read("/f.txt", None).await.expect("text"), "hello");
+        assert_eq!(
+            fs.read_bytes("/f.txt", None).await.expect("bytes"),
+            b"hello"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_missing_is_file_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/files"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let err = fs_for(&server).read("/nope", None).await.expect_err("404");
+        assert!(matches!(err, crate::errors::Error::FileNotFound(_)));
+    }
 
     fn fs_for(server: &MockServer) -> Filesystem {
         let config = ConnectionConfig::new(ConnectionConfigOpts {

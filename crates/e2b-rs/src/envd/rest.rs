@@ -80,6 +80,36 @@ impl EnvdApiClient {
         })
     }
 
+    /// `GET {base}/files?path&username`. Maps 404 to [`Error::FileNotFound`] and
+    /// other non-2xx statuses to an error; returns the streaming response on success.
+    pub(crate) async fn get_files(
+        &self,
+        path: &str,
+        user: Option<&str>,
+        gzip: bool,
+    ) -> Result<reqwest::Response> {
+        let url = format!("{}/files", self.base_url);
+        let mut query: Vec<(&str, String)> = vec![("path", path.to_string())];
+        if let Some(user) = user {
+            query.push(("username", user.to_string()));
+        }
+        let mut rb = self
+            .http
+            .get(&url)
+            .timeout(self.request_timeout)
+            .query(&query);
+        if gzip {
+            rb = rb.header(reqwest::header::ACCEPT_ENCODING, "gzip");
+        }
+        let resp = rb.send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(resp);
+        }
+        let body = resp.text().await.unwrap_or_default();
+        Err(crate::errors::Error::from_status(status.as_u16(), &body))
+    }
+
     /// Probe `GET /health` and return:
     ///
     /// - `Some(true)` — responded with a 2xx status (sandbox is healthy).

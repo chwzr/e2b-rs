@@ -337,6 +337,7 @@ dependencies = [
  "async-compression",
  "async-stream",
  "base64",
+ "bytes",
  "chrono",
  "futures",
  "pbjson",

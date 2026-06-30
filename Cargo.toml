@@ -32,6 +32,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 regress = "0.10"
 tokio = { version = "1", default-features = false }
+bytes = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "stream", "rustls", "webpki-roots", "gzip", "multipart"] }
 async-compression = { version = "0.4", default-features = false, features = ["tokio", "gzip"] }
 futures = "0.3"
