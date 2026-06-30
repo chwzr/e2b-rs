@@ -152,6 +152,9 @@ pub(crate) async fn get_sandbox_metrics(
 }
 
 /// Create a snapshot of a sandbox. `POST /sandboxes/{id}/snapshots` → `SnapshotInfo`.
+///
+/// A 404 means the sandbox is gone, which JS surfaces as `SandboxNotFoundError`
+/// (mirrors [`connect_sandbox`]).
 pub(crate) async fn create_snapshot(
     api: &ApiClient,
     sandbox_id: &str,
@@ -162,8 +165,16 @@ pub(crate) async fn create_snapshot(
         body["name"] = serde_json::Value::String(name.to_string());
     }
     let path = format!("/sandboxes/{sandbox_id}/snapshots");
-    api.request(reqwest::Method::POST, &path, &[], Some(&body))
+    match api
+        .request::<api_schema::SnapshotInfo>(reqwest::Method::POST, &path, &[], Some(&body))
         .await
+    {
+        Ok(info) => Ok(info),
+        Err(Error::NotFound(_)) => Err(Error::SandboxNotFound(format!(
+            "Sandbox {sandbox_id} not found"
+        ))),
+        Err(e) => Err(e),
+    }
 }
 
 /// Delete a snapshot (a snapshot is a template). `DELETE /templates/{id}`;
@@ -363,6 +374,20 @@ mod tests {
             .await
             .expect("snapshot");
         assert_eq!(info.snapshot_id, "snap_1");
+    }
+
+    #[tokio::test]
+    async fn create_snapshot_maps_404_to_sandbox_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sandboxes/sbx_gone/snapshots"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let err = create_snapshot(&api_for(&server), "sbx_gone", None)
+            .await
+            .expect_err("missing sandbox");
+        assert!(matches!(err, Error::SandboxNotFound(_)));
     }
 
     #[tokio::test]
