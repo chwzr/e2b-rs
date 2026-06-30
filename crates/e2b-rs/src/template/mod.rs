@@ -17,6 +17,7 @@
 //! HTTP calls and full build orchestration arrive in later milestones.
 
 pub(crate) mod archive;
+pub(crate) mod build_api;
 pub mod builder;
 pub(crate) mod dockerfile;
 pub(crate) mod files;
