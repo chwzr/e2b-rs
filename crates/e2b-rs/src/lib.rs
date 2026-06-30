@@ -146,6 +146,6 @@ pub mod paginator;
 pub use paginator::PaginationState;
 
 pub use volume::{
-    VolumeAndToken, VolumeEntryStat, VolumeFileType, VolumeInfo, VolumeListOpts, VolumeMakeDirOpts,
-    VolumeMetadataOpts, VolumeReadOpts, VolumeWriteOpts,
+    Volume, VolumeAndToken, VolumeEntryStat, VolumeFileType, VolumeInfo, VolumeListOpts,
+    VolumeMakeDirOpts, VolumeMetadataOpts, VolumeOpts, VolumeReadOpts, VolumeWriteOpts,
 };
