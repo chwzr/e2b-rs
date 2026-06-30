@@ -129,6 +129,89 @@ impl Filesystem {
             Err(e) => Err(e),
         }
     }
+
+    /// List directory entries, descending `depth` levels (default 1). Entries
+    /// with an unknown file type are skipped.
+    pub async fn list(
+        &self,
+        path: &str,
+        depth: Option<u32>,
+        user: Option<&str>,
+    ) -> Result<Vec<EntryInfo>> {
+        let depth = depth.unwrap_or(1);
+        if depth < 1 {
+            return Err(Error::InvalidArgument(
+                "list depth must be at least 1".to_string(),
+            ));
+        }
+        let user = self.resolve_user(user);
+        let req = pb::ListDirRequest {
+            path: path.to_string(),
+            depth,
+        };
+        let resp: pb::ListDirResponse = self
+            .connect
+            .unary(crate::connect::FS_LIST_DIR, &req, user.as_deref())
+            .await
+            .map_err(|e| file_not_found_on_missing(e, path))?;
+        Ok(resp
+            .entries
+            .into_iter()
+            .filter_map(EntryInfo::from_proto)
+            .collect())
+    }
+
+    /// Create a directory. Returns `false` if it already exists.
+    pub async fn make_dir(&self, path: &str, user: Option<&str>) -> Result<bool> {
+        let user = self.resolve_user(user);
+        let req = pb::MakeDirRequest {
+            path: path.to_string(),
+        };
+        match self
+            .connect
+            .unary::<_, pb::MakeDirResponse>(crate::connect::FS_MAKE_DIR, &req, user.as_deref())
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(Error::Conflict(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Remove a file or directory.
+    pub async fn remove(&self, path: &str, user: Option<&str>) -> Result<()> {
+        let user = self.resolve_user(user);
+        let req = pb::RemoveRequest {
+            path: path.to_string(),
+        };
+        self.connect
+            .unary::<_, pb::RemoveResponse>(crate::connect::FS_REMOVE, &req, user.as_deref())
+            .await
+            .map(|_| ())
+            .map_err(|e| file_not_found_on_missing(e, path))
+    }
+
+    /// Move/rename an entry, returning the moved entry's info.
+    pub async fn rename(
+        &self,
+        old_path: &str,
+        new_path: &str,
+        user: Option<&str>,
+    ) -> Result<EntryInfo> {
+        let user = self.resolve_user(user);
+        let req = pb::MoveRequest {
+            source: old_path.to_string(),
+            destination: new_path.to_string(),
+        };
+        let resp: pb::MoveResponse = self
+            .connect
+            .unary(crate::connect::FS_MOVE, &req, user.as_deref())
+            .await
+            .map_err(|e| file_not_found_on_missing(e, old_path))?;
+        resp.entry
+            .and_then(EntryInfo::from_proto)
+            .ok_or_else(|| Error::Internal(format!("Move returned no entry for {new_path}")))
+    }
 }
 
 #[cfg(test)]
@@ -191,5 +274,49 @@ mod tests {
             .mount(&server)
             .await;
         assert!(!fs_for(&server).exists("/nope", None).await.expect("exists"));
+    }
+
+    #[tokio::test]
+    async fn list_returns_entries_and_filters_unknown() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/filesystem.Filesystem/ListDir"))
+            .and(body_partial_json(
+                serde_json::json!({ "path": "/d", "depth": 1 }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "entries": [
+                    entry_json("/d/f.txt"),
+                    { "name": "weird", "type": "FILE_TYPE_UNSPECIFIED", "path": "/d/weird" }
+                ]
+            })))
+            .mount(&server)
+            .await;
+        let out = fs_for(&server).list("/d", None, None).await.expect("list");
+        assert_eq!(out.len(), 1); // unknown-type entry filtered out
+        assert_eq!(out[0].path, "/d/f.txt");
+    }
+
+    #[tokio::test]
+    async fn list_rejects_zero_depth() {
+        let server = MockServer::start().await;
+        let err = fs_for(&server)
+            .list("/d", Some(0), None)
+            .await
+            .expect_err("depth");
+        assert!(matches!(err, crate::errors::Error::InvalidArgument(_)));
+    }
+
+    #[tokio::test]
+    async fn make_dir_false_on_already_exists() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/filesystem.Filesystem/MakeDir"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(
+                serde_json::json!({ "code": "already_exists", "message": "exists" }),
+            ))
+            .mount(&server)
+            .await;
+        assert!(!fs_for(&server).make_dir("/d", None).await.expect("makedir"));
     }
 }
