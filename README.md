@@ -4,9 +4,12 @@ Rust SDK for [E2B](https://e2b.dev) — cloud sandboxes for AI agents. A 1:1 por
 of the official [JavaScript SDK](https://github.com/e2b-dev/e2b/tree/main/packages/js-sdk),
 built to feel familiar while reading as idiomatic async Rust.
 
-> **Status:** under active development, built in milestones. The foundation
-> layer (configuration, errors, logging, pagination, signatures) is in place;
-> sandbox creation, commands, filesystem, git, volumes, and templates follow.
+> **Status:** feature-complete 1:1 port of the E2B JavaScript SDK. All
+> subsystems are implemented: sandbox lifecycle, filesystem, commands, PTY,
+> git, volumes, and the full template build pipeline (builder methods, file
+> context upload, log streaming, tag management). MCP server wiring and the
+> devcontainer-beta APIs are deferred by explicit decision; see
+> `docs/parity-checklist.md` for details.
 
 ## Installation
 
@@ -82,16 +85,26 @@ let text = volume.read_file("/hello.txt").await?;
 println!("{text}");
 ```
 
-Build a custom template from a Docker base image and stream the build logs as
-they arrive:
+Build a custom sandbox template using the fluent builder chain and stream the
+build logs as they arrive. Convenience entry points cover common base images
+(`from_python_image`, `from_node_image`, `from_bun_image`, `from_debian_image`,
+`from_ubuntu_image`) as well as private registries (`from_aws_registry`,
+`from_gcp_registry`). File-system and command builder methods (`copy`,
+`run_cmd`, `set_workdir`, package installers, `git_clone`, …) produce
+individual image layers:
 
 ```rust
 use e2b_rs::{Template, wait_for_timeout};
 
-let template = Template::new()
-    .from_image("node:20")
-    .set_start_cmd("npm start", wait_for_timeout(20_000));
-let mut build = template.build("my-template", Default::default()).await?;
+// copy() returns Result<Template>, so we break the chain and propagate the error.
+let template = Template::new().from_python_image("3.12");
+let template = template.copy("requirements.txt", "/app/", Default::default())?;
+let template = template
+    .run_cmd("pip install -r /app/requirements.txt", Default::default())
+    .set_workdir("/app")
+    .set_start_cmd("python app.py", wait_for_timeout(20_000));
+
+let mut build = template.build("my-app", Default::default()).await?;
 while let Some(log) = build.next().await {
     println!("{log}");
 }

@@ -181,6 +181,216 @@ impl std::fmt::Debug for BuildOptions {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// File-op builder option structs
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Options for the [`Template::copy`] builder method.
+///
+/// All fields are optional and default to `None` / `false`. Construct with
+/// `Default::default()` or use struct-update syntax:
+///
+/// ```rust
+/// use e2b_rs::template::CopyOpts;
+/// let opts = CopyOpts { user: Some("myuser".to_string()), ..Default::default() };
+/// ```
+#[derive(Default, Clone)]
+pub struct CopyOpts {
+    /// If `true`, forces the file-upload step even when the content hash
+    /// matches the server-side cache.
+    pub force_upload: Option<bool>,
+    /// User (and optionally group) for the copied files, e.g. `"user:group"`.
+    /// Passed verbatim to the build backend's `--chown` equivalent.
+    pub user: Option<String>,
+    /// Unix file permission bits for the copied files (e.g. `0o755`).
+    /// Serialised as a zero-padded four-digit octal string (`"0755"`).
+    pub mode: Option<u32>,
+    /// Whether to resolve symbolic links in source paths before copying.
+    /// When `true`, the target of the symlink is hashed instead of the link
+    /// itself.
+    pub resolve_symlinks: Option<bool>,
+}
+
+/// Options for the [`Template::remove`] builder method.
+///
+/// Controls the flags passed to `rm` and the user under which the command
+/// is executed.
+#[derive(Default, Clone)]
+pub struct RemoveOpts {
+    /// If `true`, pass `-f` to `rm` (suppress errors for non-existent files).
+    pub force: bool,
+    /// If `true`, pass `-r` to `rm` (remove directories recursively).
+    pub recursive: bool,
+    /// Run the `rm` command as this user inside the build sandbox.
+    pub user: Option<String>,
+}
+
+/// Options for the [`Template::rename`] builder method.
+///
+/// Controls the flags passed to `mv` and the user under which the command
+/// is executed.
+#[derive(Default, Clone)]
+pub struct RenameOpts {
+    /// If `true`, pass `-f` to `mv` (overwrite the destination without
+    /// prompting).
+    pub force: bool,
+    /// Run the `mv` command as this user inside the build sandbox.
+    pub user: Option<String>,
+}
+
+/// Options for the [`Template::make_dir`] builder method.
+///
+/// Controls the permission mode and the user under which the command is
+/// executed.
+#[derive(Default, Clone)]
+pub struct MakeDirOpts {
+    /// Run the `mkdir` command as this user inside the build sandbox.
+    pub user: Option<String>,
+    /// Unix file permission bits for the created directory (e.g. `0o755`).
+    /// Serialised as a zero-padded four-digit octal string and passed via
+    /// `-m <mode>` to `mkdir`.
+    pub mode: Option<u32>,
+}
+
+/// Options for the [`Template::make_symlink`] builder method.
+///
+/// Controls the flags passed to `ln` and the user under which the command
+/// is executed.
+#[derive(Default, Clone)]
+pub struct MakeSymlinkOpts {
+    /// If `true`, pass `-f` to `ln` (remove the destination before creating
+    /// the link).
+    pub force: bool,
+    /// Run the `ln` command as this user inside the build sandbox.
+    pub user: Option<String>,
+}
+
+/// Options for the [`Template::run_cmd`] and [`Template::run_cmds`] builder
+/// methods.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, RunCmdOpts};
+///
+/// let t = Template::new()
+///     .run_cmd("echo hello", RunCmdOpts { user: Some("root".to_string()) });
+/// ```
+#[derive(Default, Clone)]
+pub struct RunCmdOpts {
+    /// Run the command as this user inside the build sandbox.
+    pub user: Option<String>,
+}
+
+/// Options for the [`Template::pip_install`] builder method.
+///
+/// Note: `global` defaults to `true` (matching the JS SDK's `g ?? true`).
+/// Use an explicit `PipInstallOpts { global: false }` for user-level installs.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, PipInstallOpts};
+///
+/// // Global install (root, default):
+/// let t = Template::new().pip_install(&["requests"], PipInstallOpts::default());
+///
+/// // Per-user install:
+/// let t = Template::new()
+///     .pip_install(&["requests"], PipInstallOpts { global: false });
+/// ```
+#[derive(Clone)]
+pub struct PipInstallOpts {
+    /// If `true` (the default), run as root and install packages globally.
+    /// If `false`, pass `--user` to `pip install` and run without a user override.
+    pub global: bool,
+}
+
+impl Default for PipInstallOpts {
+    fn default() -> Self {
+        Self { global: true }
+    }
+}
+
+/// Options for the [`Template::npm_install`] builder method.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, NpmInstallOpts};
+///
+/// let t = Template::new()
+///     .npm_install(&["typescript"], NpmInstallOpts { global: true, dev: false });
+/// ```
+#[derive(Default, Clone)]
+pub struct NpmInstallOpts {
+    /// If `true`, pass `-g` to install packages globally (runs as root).
+    pub global: bool,
+    /// If `true`, pass `--save-dev` to install as a development dependency.
+    pub dev: bool,
+}
+
+/// Options for the [`Template::bun_install`] builder method.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, BunInstallOpts};
+///
+/// let t = Template::new()
+///     .bun_install(&["elysia"], BunInstallOpts { global: false, dev: false });
+/// ```
+#[derive(Default, Clone)]
+pub struct BunInstallOpts {
+    /// If `true`, pass `-g` to install packages globally (runs as root).
+    pub global: bool,
+    /// If `true`, pass `--dev` to install as a development dependency.
+    pub dev: bool,
+}
+
+/// Options for the [`Template::apt_install`] builder method.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, AptInstallOpts};
+///
+/// let t = Template::new().apt_install(
+///     &["curl", "git"],
+///     AptInstallOpts { no_install_recommends: true, fix_missing: false },
+/// );
+/// ```
+#[derive(Default, Clone)]
+pub struct AptInstallOpts {
+    /// If `true`, pass `--no-install-recommends` to `apt-get install`.
+    pub no_install_recommends: bool,
+    /// If `true`, pass `--fix-missing` to `apt-get install`.
+    pub fix_missing: bool,
+}
+
+/// Options for the [`Template::git_clone`] builder method.
+///
+/// # Example
+///
+/// ```rust
+/// use e2b_rs::template::{Template, GitCloneOpts};
+///
+/// let t = Template::new().git_clone(
+///     "https://github.com/owner/repo.git",
+///     Some("/opt/repo"),
+///     GitCloneOpts { branch: Some("main".to_string()), depth: Some(1), user: None },
+/// );
+/// ```
+#[derive(Default, Clone)]
+pub struct GitCloneOpts {
+    /// Branch to clone. When set, appends `--branch <branch> --single-branch`.
+    pub branch: Option<String>,
+    /// Shallow-clone depth. When set, appends `--depth <depth>`.
+    pub depth: Option<u32>,
+    /// Run the clone command as this user inside the build sandbox.
+    pub user: Option<String>,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Template
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -271,6 +481,155 @@ impl Template {
     pub fn from_template(mut self, id_or_alias: &str) -> Self {
         self.base_template = Some(id_or_alias.to_string());
         self.base_image = None;
+        self
+    }
+
+    // ── Distro / runtime convenience variants ─────────────────────────────────
+
+    /// Use a Debian image as the base for this template.
+    ///
+    /// Equivalent to `from_image(&format!("debian:{variant}"))`. The JS SDK
+    /// defaults to `"stable"`; pass that string explicitly when you want the
+    /// same default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_debian_image("stable");
+    /// ```
+    pub fn from_debian_image(self, variant: &str) -> Self {
+        self.from_image(&format!("debian:{variant}"))
+    }
+
+    /// Use an Ubuntu image as the base for this template.
+    ///
+    /// Equivalent to `from_image(&format!("ubuntu:{variant}"))`. The JS SDK
+    /// defaults to `"latest"`; pass that string explicitly when you want the
+    /// same default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_ubuntu_image("latest");
+    /// ```
+    pub fn from_ubuntu_image(self, variant: &str) -> Self {
+        self.from_image(&format!("ubuntu:{variant}"))
+    }
+
+    /// Use a Python image as the base for this template.
+    ///
+    /// Equivalent to `from_image(&format!("python:{version}"))`. The JS SDK
+    /// defaults to `"3"`; pass that string explicitly when you want the same
+    /// default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_python_image("3.12");
+    /// ```
+    pub fn from_python_image(self, version: &str) -> Self {
+        self.from_image(&format!("python:{version}"))
+    }
+
+    /// Use a Node.js image as the base for this template.
+    ///
+    /// Equivalent to `from_image(&format!("node:{variant}"))`. The JS SDK
+    /// defaults to `"lts"`; pass that string explicitly when you want the same
+    /// default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_node_image("lts");
+    /// ```
+    pub fn from_node_image(self, variant: &str) -> Self {
+        self.from_image(&format!("node:{variant}"))
+    }
+
+    /// Use a Bun image as the base for this template.
+    ///
+    /// Equivalent to `from_image(&format!("oven/bun:{variant}"))`. The JS SDK
+    /// defaults to `"latest"`; pass that string explicitly when you want the
+    /// same default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_bun_image("latest");
+    /// ```
+    pub fn from_bun_image(self, variant: &str) -> Self {
+        self.from_image(&format!("oven/bun:{variant}"))
+    }
+
+    // ── Private-registry entry points ─────────────────────────────────────────
+
+    /// Use an image from Amazon ECR as the base for this template.
+    ///
+    /// Sets `base_image` to `image`, clears any previously set `base_template`,
+    /// and stores the provided AWS credentials as [`RegistryConfig::Aws`].
+    ///
+    /// The credentials are used by the E2B build backend to authenticate the
+    /// `docker pull` call; they are never stored in plaintext in logs (see
+    /// [`RegistryConfig`]'s `Debug` implementation).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new().from_aws_registry(
+    ///     "123456789.dkr.ecr.us-east-1.amazonaws.com/my-image:latest",
+    ///     "AKIAIOSFODNN7EXAMPLE",
+    ///     "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    ///     "us-east-1",
+    /// );
+    /// ```
+    pub fn from_aws_registry(
+        mut self,
+        image: &str,
+        access_key_id: &str,
+        secret_access_key: &str,
+        region: &str,
+    ) -> Self {
+        self.base_image = Some(image.to_string());
+        self.base_template = None;
+        self.registry_config = Some(RegistryConfig::Aws {
+            access_key_id: access_key_id.to_string(),
+            secret_access_key: secret_access_key.to_string(),
+            region: region.to_string(),
+        });
+        self
+    }
+
+    /// Use an image from Google Container Registry or Artifact Registry as the
+    /// base for this template.
+    ///
+    /// Sets `base_image` to `image`, clears any previously set `base_template`,
+    /// and stores the provided GCP service-account JSON as
+    /// [`RegistryConfig::Gcp`].
+    ///
+    /// `service_account_json` must be the raw JSON content of a GCP
+    /// service-account key file (not a file path). The credentials are never
+    /// logged in plaintext (see [`RegistryConfig`]'s `Debug` implementation).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let sa_json = r#"{"type":"service_account","project_id":"my-proj"}"#;
+    /// let t = Template::new()
+    ///     .from_gcp_registry("gcr.io/my-proj/my-image:latest", sa_json);
+    /// ```
+    pub fn from_gcp_registry(mut self, image: &str, service_account_json: &str) -> Self {
+        self.base_image = Some(image.to_string());
+        self.base_template = None;
+        self.registry_config = Some(RegistryConfig::Gcp {
+            service_account_json: service_account_json.to_string(),
+        });
         self
     }
 
@@ -467,6 +826,541 @@ impl Template {
         Ok(info)
     }
 
+    // ── File-op builder methods ───────────────────────────────────────────────
+
+    /// Copy a single source file or directory into the template image.
+    ///
+    /// `src` must be a relative path within the build context directory.
+    /// Absolute paths and paths that escape the context via `..` return
+    /// [`crate::errors::Error::InvalidArgument`].
+    ///
+    /// The resulting `COPY` instruction is appended with args
+    /// `[src, dest, user, mode_octal]`, matching the shape consumed by the
+    /// upload layer in Plan 5c.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::InvalidArgument`] when `src` is absolute or
+    /// escapes the context directory.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, CopyOpts};
+    ///
+    /// # fn main() -> e2b_rs::Result<()> {
+    /// let t = Template::new()
+    ///     .copy("app.js", "/app/app.js", CopyOpts { user: Some("appuser".to_string()), ..Default::default() })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn copy(mut self, src: &str, dest: &str, opts: CopyOpts) -> crate::errors::Result<Self> {
+        crate::template::files::validate_relative_path(src)?;
+        self.instructions.push(crate::template::types::Instruction {
+            instruction_type: crate::template::types::InstructionType::Copy,
+            args: vec![
+                src.to_string(),
+                dest.to_string(),
+                opts.user.clone().unwrap_or_default(),
+                opts.mode.map(pad_octal).unwrap_or_default(),
+            ],
+            force: opts.force_upload.unwrap_or(false) || self.force,
+            force_upload: opts.force_upload,
+            files_hash: None,
+            resolve_symlinks: opts.resolve_symlinks.unwrap_or(false),
+        });
+        Ok(self)
+    }
+
+    /// Copy multiple source items into the template image in a single call.
+    ///
+    /// Iterates over `items` and, for each [`crate::template::types::CopyItem`],
+    /// iterates over its `src` paths and validates + pushes a `COPY`
+    /// instruction for each. Validation rules are the same as [`Template::copy`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::InvalidArgument`] when any source path is
+    /// absolute or escapes the context directory. Processing stops at the
+    /// first invalid path.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// use e2b_rs::CopyItem;
+    ///
+    /// # fn main() -> e2b_rs::Result<()> {
+    /// let t = Template::new().copy_items(vec![
+    ///     CopyItem { src: vec!["src/main.rs".to_string()], dest: "/app/main.rs".to_string(), ..Default::default() },
+    /// ])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn copy_items(
+        mut self,
+        items: Vec<crate::template::types::CopyItem>,
+    ) -> crate::errors::Result<Self> {
+        for item in items {
+            for src in &item.src {
+                crate::template::files::validate_relative_path(src)?;
+                self.instructions.push(crate::template::types::Instruction {
+                    instruction_type: crate::template::types::InstructionType::Copy,
+                    args: vec![
+                        src.clone(),
+                        item.dest.clone(),
+                        item.user.clone().unwrap_or_default(),
+                        item.mode.map(pad_octal).unwrap_or_default(),
+                    ],
+                    force: item.force_upload.unwrap_or(false) || self.force,
+                    force_upload: item.force_upload,
+                    files_hash: None,
+                    resolve_symlinks: item.resolve_symlinks,
+                });
+            }
+        }
+        Ok(self)
+    }
+
+    /// Remove files or directories inside the template image.
+    ///
+    /// Builds `rm [-r] [-f] <quoted-paths>` and pushes it as a `RUN`
+    /// instruction. Flags are added in the order `-r` then `-f` to match the
+    /// JavaScript SDK's `remove` implementation.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, RemoveOpts};
+    ///
+    /// let t = Template::new()
+    ///     .remove(&["/tmp/cache"], RemoveOpts { recursive: true, ..Default::default() });
+    /// ```
+    pub fn remove(mut self, paths: &[&str], opts: RemoveOpts) -> Self {
+        let mut parts = vec!["rm".to_string()];
+        if opts.recursive {
+            parts.push("-r".to_string());
+        }
+        if opts.force {
+            parts.push("-f".to_string());
+        }
+        for p in paths {
+            parts.push(crate::utils::shell_quote(p));
+        }
+        let cmd = parts.join(" ");
+        self.push_run(cmd, opts.user);
+        self
+    }
+
+    /// Rename or move a file inside the template image.
+    ///
+    /// Builds `mv <quoted-src> <quoted-dest> [-f]` and pushes it as a `RUN`
+    /// instruction. Mirrors the JavaScript SDK's `rename` (line 659).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, RenameOpts};
+    ///
+    /// let t = Template::new()
+    ///     .rename("old.txt", "new.txt", RenameOpts::default());
+    /// ```
+    pub fn rename(mut self, src: &str, dest: &str, opts: RenameOpts) -> Self {
+        let mut parts = vec![
+            "mv".to_string(),
+            crate::utils::shell_quote(src),
+            crate::utils::shell_quote(dest),
+        ];
+        if opts.force {
+            parts.push("-f".to_string());
+        }
+        let cmd = parts.join(" ");
+        self.push_run(cmd, opts.user);
+        self
+    }
+
+    /// Create one or more directories inside the template image.
+    ///
+    /// Builds `mkdir -p [-m <mode>] <quoted-paths>` and pushes it as a `RUN`
+    /// instruction. Mirrors the JavaScript SDK's `makeDir` (line 673).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, MakeDirOpts};
+    ///
+    /// let t = Template::new()
+    ///     .make_dir(&["/app/logs"], MakeDirOpts { mode: Some(0o755), ..Default::default() });
+    /// ```
+    pub fn make_dir(mut self, paths: &[&str], opts: MakeDirOpts) -> Self {
+        let mut parts = vec!["mkdir".to_string(), "-p".to_string()];
+        if let Some(mode) = opts.mode {
+            parts.push(format!("-m {}", pad_octal(mode)));
+        }
+        for p in paths {
+            parts.push(crate::utils::shell_quote(p));
+        }
+        let cmd = parts.join(" ");
+        self.push_run(cmd, opts.user);
+        self
+    }
+
+    /// Create a symbolic link inside the template image.
+    ///
+    /// Builds `ln -s [-f] <quoted-src> <quoted-dest>` and pushes it as a
+    /// `RUN` instruction. Mirrors the JavaScript SDK's `makeSymlink`
+    /// (line 688).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, MakeSymlinkOpts};
+    ///
+    /// let t = Template::new()
+    ///     .make_symlink("/usr/local/bin/node", "/usr/bin/node", MakeSymlinkOpts::default());
+    /// ```
+    pub fn make_symlink(mut self, src: &str, dest: &str, opts: MakeSymlinkOpts) -> Self {
+        let mut parts = vec!["ln".to_string(), "-s".to_string()];
+        if opts.force {
+            parts.push("-f".to_string());
+        }
+        parts.push(crate::utils::shell_quote(src));
+        parts.push(crate::utils::shell_quote(dest));
+        let cmd = parts.join(" ");
+        self.push_run(cmd, opts.user);
+        self
+    }
+
+    // ── Command / env / package-installer / git-clone builder methods ─────────
+
+    /// Run a single shell command inside the build sandbox.
+    ///
+    /// Appends a `RUN <command>` instruction. Use [`Template::run_cmds`] to
+    /// join multiple commands with `&&` in a single layer.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, RunCmdOpts};
+    ///
+    /// let t = Template::new()
+    ///     .run_cmd("npm install", RunCmdOpts::default());
+    /// ```
+    pub fn run_cmd(mut self, command: &str, opts: RunCmdOpts) -> Self {
+        self.push_run(command.to_string(), opts.user);
+        self
+    }
+
+    /// Run multiple shell commands inside the build sandbox, joined with `&&`.
+    ///
+    /// Equivalent to `run_cmd(commands.join(" && "), opts)`. All commands run
+    /// in a single image layer.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, RunCmdOpts};
+    ///
+    /// let t = Template::new()
+    ///     .run_cmds(&["apt-get update", "apt-get install -y curl"], RunCmdOpts::default());
+    /// ```
+    pub fn run_cmds(mut self, commands: &[&str], opts: RunCmdOpts) -> Self {
+        self.push_run(commands.join(" && "), opts.user);
+        self
+    }
+
+    /// Set the working directory for subsequent build instructions.
+    ///
+    /// Appends a `WORKDIR <path>` instruction. Port of `setWorkdir` in the JS
+    /// SDK (line 728).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    ///
+    /// let t = Template::new().set_workdir("/app");
+    /// ```
+    pub fn set_workdir(mut self, path: &str) -> Self {
+        self.instructions.push(crate::template::types::Instruction {
+            instruction_type: crate::template::types::InstructionType::Workdir,
+            args: vec![path.to_string()],
+            force: self.force,
+            force_upload: None,
+            files_hash: None,
+            resolve_symlinks: false,
+        });
+        self
+    }
+
+    /// Set the user for subsequent build instructions.
+    ///
+    /// Appends a `USER <user>` instruction. Port of `setUser` in the JS SDK
+    /// (line 739).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    ///
+    /// let t = Template::new().set_user("appuser");
+    /// ```
+    pub fn set_user(mut self, user: &str) -> Self {
+        self.instructions.push(crate::template::types::Instruction {
+            instruction_type: crate::template::types::InstructionType::User,
+            args: vec![user.to_string()],
+            force: self.force,
+            force_upload: None,
+            files_hash: None,
+            resolve_symlinks: false,
+        });
+        self
+    }
+
+    /// Set one or more environment variables in the template image.
+    ///
+    /// Appends an `ENV k1 v1 k2 v2 …` instruction with keys and values
+    /// interleaved in [`std::collections::BTreeMap`] iteration order (sorted
+    /// ascending by key). If `envs` is empty the method returns `self`
+    /// unchanged. Port of `setEnvs` in the JS SDK (line 915).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::collections::BTreeMap;
+    /// use e2b_rs::template::Template;
+    ///
+    /// let mut envs = BTreeMap::new();
+    /// envs.insert("PORT".to_string(), "3000".to_string());
+    /// envs.insert("NODE_ENV".to_string(), "production".to_string());
+    /// let t = Template::new().set_envs(envs);
+    /// ```
+    pub fn set_envs(mut self, envs: std::collections::BTreeMap<String, String>) -> Self {
+        if envs.is_empty() {
+            return self;
+        }
+        let args: Vec<String> = envs.into_iter().flat_map(|(k, v)| [k, v]).collect();
+        self.instructions.push(crate::template::types::Instruction {
+            instruction_type: crate::template::types::InstructionType::Env,
+            args,
+            force: self.force,
+            force_upload: None,
+            files_hash: None,
+            resolve_symlinks: false,
+        });
+        self
+    }
+
+    /// Install Python packages with `pip install`.
+    ///
+    /// When `packages` is empty, installs from the current directory (`.`).
+    /// When `opts.global` is `true` (the default), runs as root and installs
+    /// globally; when `false`, passes `--user` and runs without a user
+    /// override. Port of `pipInstall` in the JS SDK (line 750).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, PipInstallOpts};
+    ///
+    /// // Global install (default):
+    /// let t = Template::new().pip_install(&["requests"], PipInstallOpts::default());
+    ///
+    /// // User-local install:
+    /// let t = Template::new()
+    ///     .pip_install(&["requests"], PipInstallOpts { global: false });
+    /// ```
+    pub fn pip_install(mut self, packages: &[&str], opts: PipInstallOpts) -> Self {
+        let mut parts = vec!["pip".to_string(), "install".to_string()];
+        if !opts.global {
+            parts.push("--user".to_string());
+        }
+        if packages.is_empty() {
+            parts.push(".".to_string());
+        } else {
+            for p in packages {
+                parts.push(p.to_string());
+            }
+        }
+        let cmd = parts.join(" ");
+        let user = if opts.global {
+            Some("root".to_string())
+        } else {
+            None
+        };
+        self.push_run(cmd, user);
+        self
+    }
+
+    /// Install Node.js packages with `npm install`.
+    ///
+    /// Passes `-g` when `opts.global` is `true` (also runs as root) and
+    /// `--save-dev` when `opts.dev` is `true`. Port of `npmInstall` in the JS
+    /// SDK (line 778).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, NpmInstallOpts};
+    ///
+    /// let t = Template::new()
+    ///     .npm_install(&["typescript"], NpmInstallOpts { global: true, dev: false });
+    /// ```
+    pub fn npm_install(mut self, packages: &[&str], opts: NpmInstallOpts) -> Self {
+        let mut parts = vec!["npm".to_string(), "install".to_string()];
+        if opts.global {
+            parts.push("-g".to_string());
+        }
+        if opts.dev {
+            parts.push("--save-dev".to_string());
+        }
+        for p in packages {
+            parts.push(p.to_string());
+        }
+        let cmd = parts.join(" ");
+        let user = if opts.global {
+            Some("root".to_string())
+        } else {
+            None
+        };
+        self.push_run(cmd, user);
+        self
+    }
+
+    /// Install packages with `bun install`.
+    ///
+    /// Passes `-g` when `opts.global` is `true` (also runs as root via
+    /// `user: "root"`) and `--dev` when `opts.dev` is `true`. Port of
+    /// `bunInstall` in the JS SDK (line 805).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, BunInstallOpts};
+    ///
+    /// let t = Template::new()
+    ///     .bun_install(&["elysia"], BunInstallOpts { global: false, dev: false });
+    /// ```
+    pub fn bun_install(mut self, packages: &[&str], opts: BunInstallOpts) -> Self {
+        let mut parts = vec!["bun".to_string(), "install".to_string()];
+        if opts.global {
+            parts.push("-g".to_string());
+        }
+        if opts.dev {
+            parts.push("--dev".to_string());
+        }
+        for p in packages {
+            parts.push(p.to_string());
+        }
+        let cmd = parts.join(" ");
+        let user = if opts.global {
+            Some("root".to_string())
+        } else {
+            None
+        };
+        self.push_run(cmd, user);
+        self
+    }
+
+    /// Install system packages with `apt-get`.
+    ///
+    /// Runs as root and appends a two-command `RUN` instruction:
+    /// `apt-get update && DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes
+    /// apt-get install -y [--no-install-recommends] [--fix-missing] <packages>`.
+    /// Port of `aptInstall` in the JS SDK (line 832).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, AptInstallOpts};
+    ///
+    /// let t = Template::new().apt_install(
+    ///     &["curl", "git"],
+    ///     AptInstallOpts { no_install_recommends: true, ..Default::default() },
+    /// );
+    /// ```
+    pub fn apt_install(mut self, packages: &[&str], opts: AptInstallOpts) -> Self {
+        let install_cmd = format!(
+            "DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y {}{}{}",
+            if opts.no_install_recommends {
+                "--no-install-recommends "
+            } else {
+                ""
+            },
+            if opts.fix_missing {
+                "--fix-missing "
+            } else {
+                ""
+            },
+            packages.join(" ")
+        );
+        let cmd = format!("apt-get update && {install_cmd}");
+        self.push_run(cmd, Some("root".to_string()));
+        self
+    }
+
+    /// Clone a Git repository into the template image.
+    ///
+    /// Builds a `git clone <url> [--branch <branch> --single-branch]
+    /// [--depth <depth>] [<path>]` command and appends it as a `RUN`
+    /// instruction. The `url`, `branch`, and `path` arguments are
+    /// shell-quoted (empty becomes `''`; strings with special characters are
+    /// single-quoted). Port of `gitClone` in the JS SDK (line 866).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::{Template, GitCloneOpts};
+    ///
+    /// let t = Template::new().git_clone(
+    ///     "https://github.com/owner/repo.git",
+    ///     Some("/opt/repo"),
+    ///     GitCloneOpts { branch: Some("main".to_string()), depth: Some(1), user: None },
+    /// );
+    /// ```
+    pub fn git_clone(mut self, url: &str, path: Option<&str>, opts: GitCloneOpts) -> Self {
+        let mut parts = vec![
+            "git".to_string(),
+            "clone".to_string(),
+            crate::utils::shell_quote(url),
+        ];
+        if let Some(branch) = &opts.branch {
+            parts.push(format!("--branch {}", crate::utils::shell_quote(branch)));
+            parts.push("--single-branch".to_string());
+        }
+        if let Some(depth) = opts.depth {
+            parts.push(format!("--depth {depth}"));
+        }
+        if let Some(p) = path {
+            parts.push(crate::utils::shell_quote(p));
+        }
+        let cmd = parts.join(" ");
+        self.push_run(cmd, opts.user);
+        self
+    }
+
+    // ── Private run-instruction helper ────────────────────────────────────────
+
+    /// Push a `RUN` instruction.
+    ///
+    /// `cmd` becomes `args[0]`; `user`, if present, becomes `args[1]`.
+    /// The instruction's `force` flag is inherited from `self.force` (i.e.
+    /// the template-level skip-cache setting).
+    fn push_run(&mut self, cmd: String, user: Option<String>) {
+        let mut args = vec![cmd];
+        if let Some(u) = user {
+            args.push(u);
+        }
+        self.instructions.push(crate::template::types::Instruction {
+            instruction_type: crate::template::types::InstructionType::Run,
+            args,
+            force: self.force,
+            force_upload: None,
+            files_hash: None,
+            resolve_symlinks: false,
+        });
+    }
+
     /// Shared setup for [`Template::build`] and [`Template::build_in_background`].
     ///
     /// Performs steps 1–8 of the build pipeline:
@@ -642,6 +1536,21 @@ fn instruction_type_str(ty: InstructionType) -> String {
         InstructionType::Workdir => "WORKDIR".to_string(),
         InstructionType::User => "USER".to_string(),
     }
+}
+
+/// Format a Unix permission mode as a zero-padded four-digit octal string.
+///
+/// Port of the JavaScript SDK's `padOctal` (`utils.ts:352`):
+/// `mode.toString(8).padStart(4, '0')`.
+///
+/// # Example
+///
+/// ```text
+/// pad_octal(0o755) // "0755"
+/// pad_octal(0o644) // "0644"
+/// ```
+fn pad_octal(mode: u32) -> String {
+    format!("{mode:04o}")
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1099,6 +2008,330 @@ CMD npm start
         assert_eq!(info.alias.as_deref(), Some("my-env:v1"));
     }
 
+    // ── from_*_image builder variants ────────────────────────────────────────
+
+    #[test]
+    fn from_python_image_sets_base() {
+        let t = Template::new().from_python_image("3.12");
+        assert_eq!(t.base_image.as_deref(), Some("python:3.12"));
+        assert_eq!(t.base_template, None);
+    }
+
+    #[test]
+    fn from_debian_image_sets_base() {
+        let t = Template::new().from_debian_image("stable");
+        assert_eq!(t.base_image.as_deref(), Some("debian:stable"));
+        assert_eq!(t.base_template, None);
+    }
+
+    #[test]
+    fn from_ubuntu_image_sets_base() {
+        let t = Template::new().from_ubuntu_image("latest");
+        assert_eq!(t.base_image.as_deref(), Some("ubuntu:latest"));
+        assert_eq!(t.base_template, None);
+    }
+
+    #[test]
+    fn from_node_image_sets_base() {
+        let t = Template::new().from_node_image("lts");
+        assert_eq!(t.base_image.as_deref(), Some("node:lts"));
+        assert_eq!(t.base_template, None);
+    }
+
+    #[test]
+    fn from_bun_image_sets_base() {
+        let t = Template::new().from_bun_image("latest");
+        assert_eq!(t.base_image.as_deref(), Some("oven/bun:latest"));
+        assert_eq!(t.base_template, None);
+    }
+
+    #[test]
+    fn from_image_variants_clear_base_template() {
+        // Verify that each from_*_image clears a previously set base_template.
+        let t = Template::new()
+            .from_template("old-tpl")
+            .from_python_image("3.11");
+        assert_eq!(t.base_template, None);
+        assert_eq!(t.base_image.as_deref(), Some("python:3.11"));
+    }
+
+    // ── from_aws_registry / from_gcp_registry ────────────────────────────────
+
+    #[test]
+    fn from_aws_registry_sets_config() {
+        let t = Template::new().from_aws_registry(
+            "123456789.dkr.ecr.us-east-1.amazonaws.com/my-image:latest",
+            "AKID_TEST",
+            "SECRET_TEST",
+            "us-east-1",
+        );
+        assert_eq!(
+            t.base_image.as_deref(),
+            Some("123456789.dkr.ecr.us-east-1.amazonaws.com/my-image:latest")
+        );
+        assert_eq!(t.base_template, None);
+        match t.registry_config {
+            Some(RegistryConfig::Aws {
+                access_key_id,
+                secret_access_key,
+                region,
+            }) => {
+                assert_eq!(access_key_id, "AKID_TEST");
+                assert_eq!(secret_access_key, "SECRET_TEST");
+                assert_eq!(region, "us-east-1");
+            }
+            other => panic!("expected RegistryConfig::Aws, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_gcp_registry_sets_config() {
+        let sa_json = r#"{"type":"service_account","project_id":"my-proj"}"#;
+        let t = Template::new().from_gcp_registry("gcr.io/my-proj/my-image:latest", sa_json);
+        assert_eq!(
+            t.base_image.as_deref(),
+            Some("gcr.io/my-proj/my-image:latest")
+        );
+        assert_eq!(t.base_template, None);
+        match t.registry_config {
+            Some(RegistryConfig::Gcp {
+                service_account_json,
+            }) => {
+                assert_eq!(service_account_json, sa_json);
+            }
+            other => panic!("expected RegistryConfig::Gcp, got {other:?}"),
+        }
+    }
+
+    // ── File-op builder method tests ─────────────────────────────────────────
+
+    #[test]
+    fn copy_pushes_copy_instruction() {
+        let t = Template::new()
+            .copy(
+                "app.js",
+                "/app/app.js",
+                CopyOpts {
+                    user: Some("me".to_string()),
+                    mode: Some(0o755),
+                    force_upload: Some(true),
+                    resolve_symlinks: Some(true),
+                },
+            )
+            .expect("valid relative src");
+
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(
+            instr.instruction_type,
+            crate::template::types::InstructionType::Copy
+        );
+        // args: [src, dest, user, mode_octal]
+        assert_eq!(instr.args, vec!["app.js", "/app/app.js", "me", "0755"]);
+        // force_upload propagated
+        assert_eq!(instr.force_upload, Some(true));
+        // force: force_upload=true || self.force=false → true
+        assert!(instr.force);
+        // resolve_symlinks propagated
+        assert!(instr.resolve_symlinks);
+    }
+
+    #[test]
+    fn copy_pushes_default_user_and_mode_as_empty_strings() {
+        let t = Template::new()
+            .copy("src/lib.rs", "/app/lib.rs", CopyOpts::default())
+            .expect("valid relative src");
+
+        let instr = &t.instructions[0];
+        // user and mode default to empty string
+        assert_eq!(instr.args, vec!["src/lib.rs", "/app/lib.rs", "", ""]);
+        assert_eq!(instr.force_upload, None);
+        assert!(!instr.force);
+        assert!(!instr.resolve_symlinks);
+    }
+
+    #[test]
+    fn copy_rejects_absolute_src() {
+        let result = Template::new().copy("/absolute/path", "/dest", CopyOpts::default());
+        assert!(result.is_err(), "absolute src path must return Err");
+    }
+
+    #[test]
+    fn copy_rejects_escaping_src() {
+        let result = Template::new().copy("../escape", "/dest", CopyOpts::default());
+        assert!(result.is_err(), "../escape must return Err");
+    }
+
+    #[test]
+    fn copy_items_pushes_one_instruction_per_src() {
+        let items = vec![crate::template::types::CopyItem {
+            src: vec!["a.txt".to_string(), "b.txt".to_string()],
+            dest: "/app/".to_string(),
+            user: Some("u".to_string()),
+            mode: Some(0o644),
+            force_upload: None,
+            resolve_symlinks: false,
+        }];
+        let t = Template::new().copy_items(items).expect("valid copy items");
+
+        assert_eq!(t.instructions.len(), 2, "one instruction per src path");
+        assert_eq!(t.instructions[0].args[0], "a.txt");
+        assert_eq!(t.instructions[1].args[0], "b.txt");
+        assert_eq!(t.instructions[0].args[3], "0644");
+    }
+
+    #[test]
+    fn copy_items_rejects_absolute_src() {
+        let items = vec![crate::template::types::CopyItem {
+            src: vec!["/bad".to_string()],
+            dest: "/app/".to_string(),
+            ..Default::default()
+        }];
+        assert!(Template::new().copy_items(items).is_err());
+    }
+
+    #[test]
+    fn remove_builds_rm() {
+        let t = Template::new().remove(
+            &["a", "b c"],
+            RemoveOpts {
+                recursive: true,
+                force: true,
+                user: Some("root".to_string()),
+            },
+        );
+
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(
+            instr.instruction_type,
+            crate::template::types::InstructionType::Run
+        );
+        // rm -r -f a 'b c'
+        assert_eq!(instr.args[0], "rm -r -f a 'b c'");
+        // user in args[1]
+        assert_eq!(instr.args.get(1).map(String::as_str), Some("root"));
+    }
+
+    #[test]
+    fn remove_no_flags_no_user() {
+        let t = Template::new().remove(&["file.txt"], RemoveOpts::default());
+        assert_eq!(t.instructions[0].args[0], "rm file.txt");
+        assert_eq!(t.instructions[0].args.len(), 1);
+    }
+
+    #[test]
+    fn rename_builds_mv() {
+        // No force: mv <src> <dest>
+        let t = Template::new().rename("old.txt", "new.txt", RenameOpts::default());
+        assert_eq!(t.instructions[0].args[0], "mv old.txt new.txt");
+
+        // With force: mv <src> <dest> -f  (JS SDK appends -f after operands)
+        let t2 = Template::new().rename(
+            "old.txt",
+            "new.txt",
+            RenameOpts {
+                force: true,
+                user: Some("admin".to_string()),
+            },
+        );
+        assert_eq!(t2.instructions[0].args[0], "mv old.txt new.txt -f");
+        assert_eq!(
+            t2.instructions[0].args.get(1).map(String::as_str),
+            Some("admin")
+        );
+    }
+
+    #[test]
+    fn rename_shell_quotes_paths_with_spaces() {
+        let t = Template::new().rename("my file.txt", "my new.txt", RenameOpts::default());
+        assert_eq!(t.instructions[0].args[0], "mv 'my file.txt' 'my new.txt'");
+    }
+
+    #[test]
+    fn make_dir_builds_mkdir() {
+        // With mode
+        let t = Template::new().make_dir(
+            &["/app/logs"],
+            MakeDirOpts {
+                mode: Some(0o755),
+                user: None,
+            },
+        );
+        assert_eq!(t.instructions[0].args[0], "mkdir -p -m 0755 /app/logs");
+
+        // Without mode
+        let t2 = Template::new().make_dir(&["/app/data", "/tmp/work"], MakeDirOpts::default());
+        assert_eq!(t2.instructions[0].args[0], "mkdir -p /app/data /tmp/work");
+    }
+
+    #[test]
+    fn make_dir_with_user() {
+        let t = Template::new().make_dir(
+            &["/home/user"],
+            MakeDirOpts {
+                user: Some("deployer".to_string()),
+                mode: None,
+            },
+        );
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("deployer")
+        );
+    }
+
+    #[test]
+    fn make_symlink_builds_ln() {
+        // No force: ln -s <src> <dest>
+        let t = Template::new().make_symlink("target", "link", MakeSymlinkOpts::default());
+        assert_eq!(t.instructions[0].args[0], "ln -s target link");
+
+        // With force: ln -s -f <src> <dest>
+        let t2 = Template::new().make_symlink(
+            "target",
+            "link",
+            MakeSymlinkOpts {
+                force: true,
+                user: Some("www".to_string()),
+            },
+        );
+        assert_eq!(t2.instructions[0].args[0], "ln -s -f target link");
+        assert_eq!(
+            t2.instructions[0].args.get(1).map(String::as_str),
+            Some("www")
+        );
+    }
+
+    #[test]
+    fn make_symlink_shell_quotes() {
+        let t = Template::new().make_symlink(
+            "/usr/local/bin/my app",
+            "/usr/bin/my app",
+            MakeSymlinkOpts::default(),
+        );
+        assert_eq!(
+            t.instructions[0].args[0],
+            "ln -s '/usr/local/bin/my app' '/usr/bin/my app'"
+        );
+    }
+
+    #[test]
+    fn push_run_inherits_template_force_flag() {
+        let t = Template::new()
+            .skip_cache()
+            .remove(&["tmp"], RemoveOpts::default());
+        // force is inherited from template.force = true
+        assert!(t.instructions[0].force);
+    }
+
+    #[test]
+    fn pad_octal_formats_correctly() {
+        assert_eq!(pad_octal(0o755), "0755");
+        assert_eq!(pad_octal(0o644), "0644");
+        assert_eq!(pad_octal(0o000), "0000");
+        assert_eq!(pad_octal(0o4755), "4755"); // setuid bit
+    }
+
     // ── default cpu/mem defaults (Fix 2) ──────────────────────────────────────
 
     /// When no cpu or memory overrides are provided, the build request must
@@ -1146,5 +2379,299 @@ CMD npm start
             .expect("build_in_background with default cpu/mem should succeed");
 
         assert_eq!(info.template_id, "tpl_def");
+    }
+
+    // ── Task 3: run_cmd / run_cmds ────────────────────────────────────────────
+
+    #[test]
+    fn run_cmd_pushes_run_with_user() {
+        let t = Template::new().run_cmd(
+            "echo hello",
+            RunCmdOpts {
+                user: Some("root".to_string()),
+            },
+        );
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(instr.instruction_type, InstructionType::Run);
+        // args[0] is the command, args[1] is the user
+        assert_eq!(instr.args[0], "echo hello");
+        assert_eq!(instr.args.get(1).map(String::as_str), Some("root"));
+    }
+
+    #[test]
+    fn run_cmd_no_user_args_length_one() {
+        let t = Template::new().run_cmd("ls -la", RunCmdOpts::default());
+        assert_eq!(t.instructions[0].args.len(), 1);
+        assert_eq!(t.instructions[0].args[0], "ls -la");
+    }
+
+    #[test]
+    fn run_cmds_joins_with_and() {
+        let t = Template::new().run_cmds(&["a", "b", "c"], RunCmdOpts::default());
+        assert_eq!(t.instructions.len(), 1);
+        assert_eq!(t.instructions[0].args[0], "a && b && c");
+        assert_eq!(t.instructions[0].args.len(), 1); // no user
+    }
+
+    // ── Task 3: set_workdir / set_user ────────────────────────────────────────
+
+    #[test]
+    fn set_workdir_pushes_workdir_instruction() {
+        let t = Template::new().set_workdir("/app");
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(instr.instruction_type, InstructionType::Workdir);
+        assert_eq!(instr.args, vec!["/app"]);
+    }
+
+    #[test]
+    fn set_user_pushes_user_instruction() {
+        let t = Template::new().set_user("myuser");
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(instr.instruction_type, InstructionType::User);
+        assert_eq!(instr.args, vec!["myuser"]);
+    }
+
+    // ── Task 3: set_envs ──────────────────────────────────────────────────────
+
+    #[test]
+    fn set_envs_flat_interleaved_args_sorted() {
+        let mut envs = BTreeMap::new();
+        envs.insert("Z".to_string(), "last".to_string());
+        envs.insert("A".to_string(), "first".to_string());
+        envs.insert("M".to_string(), "mid".to_string());
+
+        let t = Template::new().set_envs(envs);
+        assert_eq!(t.instructions.len(), 1);
+        let instr = &t.instructions[0];
+        assert_eq!(instr.instruction_type, InstructionType::Env);
+        // BTreeMap order: A, M, Z
+        assert_eq!(instr.args, vec!["A", "first", "M", "mid", "Z", "last"]);
+    }
+
+    #[test]
+    fn set_envs_empty_map_no_instruction() {
+        let t = Template::new().set_envs(BTreeMap::new());
+        assert_eq!(
+            t.instructions.len(),
+            0,
+            "empty envs must not push instruction"
+        );
+    }
+
+    // ── Task 3: pip_install ───────────────────────────────────────────────────
+
+    #[test]
+    fn pip_install_default_global_no_packages_installs_dot() {
+        // global=true (default), no packages → `pip install .` as root
+        let t = Template::new().pip_install(&[], PipInstallOpts::default());
+        let instr = &t.instructions[0];
+        assert_eq!(instr.args[0], "pip install .");
+        assert_eq!(instr.args.get(1).map(String::as_str), Some("root"));
+    }
+
+    #[test]
+    fn pip_install_global_with_packages() {
+        let t = Template::new().pip_install(
+            &["requests", "flask"],
+            PipInstallOpts::default(), // global=true
+        );
+        assert_eq!(t.instructions[0].args[0], "pip install requests flask");
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn pip_install_user_flag_when_not_global() {
+        let t = Template::new().pip_install(&["mypackage"], PipInstallOpts { global: false });
+        assert_eq!(t.instructions[0].args[0], "pip install --user mypackage");
+        // no user arg when global=false
+        assert_eq!(t.instructions[0].args.len(), 1);
+    }
+
+    #[test]
+    fn pip_install_user_flag_no_packages_installs_dot() {
+        let t = Template::new().pip_install(&[], PipInstallOpts { global: false });
+        assert_eq!(t.instructions[0].args[0], "pip install --user .");
+        assert_eq!(t.instructions[0].args.len(), 1); // no user in args
+    }
+
+    // ── Task 3: npm_install ───────────────────────────────────────────────────
+
+    #[test]
+    fn npm_install_flags_global_and_dev() {
+        let t = Template::new().npm_install(
+            &["a", "b"],
+            NpmInstallOpts {
+                global: true,
+                dev: true,
+            },
+        );
+        assert_eq!(t.instructions[0].args[0], "npm install -g --save-dev a b");
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn npm_install_no_flags_no_user() {
+        let t = Template::new().npm_install(&["express"], NpmInstallOpts::default());
+        assert_eq!(t.instructions[0].args[0], "npm install express");
+        assert_eq!(t.instructions[0].args.len(), 1); // no user
+    }
+
+    // ── Task 3: bun_install ───────────────────────────────────────────────────
+
+    #[test]
+    fn bun_install_global_sets_root_user() {
+        let t = Template::new().bun_install(
+            &["a"],
+            BunInstallOpts {
+                global: true,
+                dev: false,
+            },
+        );
+        assert_eq!(t.instructions[0].args[0], "bun install -g a");
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn bun_install_dev_flag() {
+        let t = Template::new().bun_install(
+            &["vitest"],
+            BunInstallOpts {
+                global: false,
+                dev: true,
+            },
+        );
+        assert_eq!(t.instructions[0].args[0], "bun install --dev vitest");
+        assert_eq!(t.instructions[0].args.len(), 1); // no user when not global
+    }
+
+    // ── Task 3: apt_install ───────────────────────────────────────────────────
+
+    #[test]
+    fn apt_install_builds_command_with_all_flags() {
+        let t = Template::new().apt_install(
+            &["a", "b"],
+            AptInstallOpts {
+                no_install_recommends: true,
+                fix_missing: true,
+            },
+        );
+        assert_eq!(
+            t.instructions[0].args[0],
+            "apt-get update && DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y --no-install-recommends --fix-missing a b"
+        );
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn apt_install_no_flags() {
+        let t = Template::new().apt_install(&["curl"], AptInstallOpts::default());
+        assert_eq!(
+            t.instructions[0].args[0],
+            "apt-get update && DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y curl"
+        );
+        // always runs as root
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn apt_install_only_no_install_recommends() {
+        let t = Template::new().apt_install(
+            &["git"],
+            AptInstallOpts {
+                no_install_recommends: true,
+                fix_missing: false,
+            },
+        );
+        assert_eq!(
+            t.instructions[0].args[0],
+            "apt-get update && DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y --no-install-recommends git"
+        );
+    }
+
+    // ── Task 3: git_clone ─────────────────────────────────────────────────────
+
+    #[test]
+    fn git_clone_full_with_all_options() {
+        let t = Template::new().git_clone(
+            "https://github.com/owner/repo.git",
+            Some("/opt/repo"),
+            GitCloneOpts {
+                branch: Some("main".to_string()),
+                depth: Some(1),
+                user: Some("deployer".to_string()),
+            },
+        );
+        assert_eq!(
+            t.instructions[0].args[0],
+            "git clone https://github.com/owner/repo.git --branch main --single-branch --depth 1 /opt/repo"
+        );
+        assert_eq!(
+            t.instructions[0].args.get(1).map(String::as_str),
+            Some("deployer")
+        );
+    }
+
+    #[test]
+    fn git_clone_minimal_no_options() {
+        let t = Template::new().git_clone(
+            "https://github.com/owner/repo.git",
+            None,
+            GitCloneOpts::default(),
+        );
+        assert_eq!(
+            t.instructions[0].args[0],
+            "git clone https://github.com/owner/repo.git"
+        );
+        assert_eq!(t.instructions[0].args.len(), 1); // no user
+    }
+
+    #[test]
+    fn git_clone_url_with_spaces_gets_shell_quoted() {
+        let t = Template::new().git_clone(
+            "git@example.com:user/my repo.git",
+            None,
+            GitCloneOpts::default(),
+        );
+        // URL has a space → must be shell-quoted
+        assert_eq!(
+            t.instructions[0].args[0],
+            "git clone 'git@example.com:user/my repo.git'"
+        );
+    }
+
+    #[test]
+    fn git_clone_branch_without_depth_or_path() {
+        let t = Template::new().git_clone(
+            "https://github.com/owner/repo.git",
+            None,
+            GitCloneOpts {
+                branch: Some("feat/my-feature".to_string()),
+                depth: None,
+                user: None,
+            },
+        );
+        // branch has `/` and `-`, which are safe shell chars → no quoting
+        assert_eq!(
+            t.instructions[0].args[0],
+            "git clone https://github.com/owner/repo.git --branch feat/my-feature --single-branch"
+        );
     }
 }

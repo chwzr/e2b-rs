@@ -1,5 +1,15 @@
 # JS → Rust parity checklist
 
+> **Feature-complete.** As of Plan 5d (2026-06-30) the `e2b-rs` crate is a
+> full 1:1 port of the E2B JavaScript SDK across all subsystems: sandbox
+> lifecycle, filesystem, commands, PTY, git, volume, and the template build
+> pipeline (builder methods, file context, HTTP build pipeline, log streaming,
+> tag management). The only documented omissions are the MCP server wiring
+> (`addMcpServer`) and the devcontainer-beta APIs
+> (`betaDevContainerPrebuild`/`betaSetDevContainerStart`), both deferred by
+> explicit user decision. Per-plan carry-forwards are noted in each section
+> below.
+
 Tracks 1:1 coverage of the E2B JavaScript SDK (`packages/js-sdk`). Each row maps
 a JS export to its `e2b-rs` equivalent. Status: ✅ done · 🔶 in progress · ⬜ planned.
 
@@ -183,7 +193,7 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 - **1-hour file timeout:** `read_file*` and `write_file` use a dedicated 60-minute timeout (`FILE_TIMEOUT_MS`) rather than the 60-second metadata default, mirroring the JS SDK's `requestTimeoutMs: opts?.requestTimeoutMs ?? FILE_TIMEOUT_MS`.
 - **Carry-forwards:** JS `VolumeApiOpts` debug/logger/signal fields not exposed (minimal opts); per-call `requestTimeoutMs` / proxy passthrough scope; `Volume` rebuilds `VolumeApiClient` per call (same as JS).
 
-## Template (Plan 5)
+## Template (Plan 5) ✅ COMPLETE
 
 ### 5a — Foundation
 
@@ -260,4 +270,41 @@ builder methods (Plan 5d). No public API is introduced in this plan.
 
 ### 5d — Builder methods
 
-_(Plan 5d: builder convenience methods — `copy`/`copyItems`/`remove`/`rename`/`makeDir`/`makeSymlink`/`runCmd`/`setWorkdir`/`setUser`/`setEnvs`/`pipInstall`/`npmInstall`/`aptInstall`/`gitClone` + the `from*` image variants. The last sub-plan of the project.)_
+| JS (`src/template/index.ts`) | Rust (`e2b_rs::template::Template::*`) | Notes | Status |
+|---|---|---|---|
+| `fromImage(image)` | `from_image(base_image)` | | ✅ |
+| `fromBaseImage()` | `from_base_image()` | Equivalent to `from_image("e2bdev/base")` | ✅ |
+| `fromTemplate(id)` | `from_template(id_or_alias)` | | ✅ |
+| `fromDockerfile(content)` | `from_dockerfile(content)` → `Result<Template>` | | ✅ |
+| `fromDebianImage(variant)` | `from_debian_image(variant)` | | ✅ |
+| `fromUbuntuImage(variant)` | `from_ubuntu_image(variant)` | | ✅ |
+| `fromPythonImage(version)` | `from_python_image(version)` | | ✅ |
+| `fromNodeImage(variant)` | `from_node_image(variant)` | | ✅ |
+| `fromBunImage(variant)` | `from_bun_image(variant)` | | ✅ |
+| `fromAwsRegistry(image, keyId, secret, region)` | `from_aws_registry(image, access_key_id, secret_access_key, region)` | Credentials excluded from `Debug` | ✅ |
+| `fromGcpRegistry(image, saJson)` | `from_gcp_registry(image, service_account_json)` | Credentials excluded from `Debug` | ✅ |
+| `copy(src, dest, opts)` | `copy(src, dest, CopyOpts)` → `Result<Template>` | Validates relative path; args = `[src, dest, user, mode_octal]` | ✅ |
+| `copyItems(items)` | `copy_items(Vec<CopyItem>)` → `Result<Template>` | Per-item relative-path validation | ✅ |
+| `remove(paths, opts)` | `remove(&[&str], RemoveOpts)` → `Template` | Builds `rm [-r] [-f] <quoted-paths>` | ✅ |
+| `rename(src, dest, opts)` | `rename(src, dest, RenameOpts)` → `Template` | Builds `mv <src> <dest> [-f]` | ✅ |
+| `makeDir(paths, opts)` | `make_dir(&[&str], MakeDirOpts)` → `Template` | Builds `mkdir -p [-m <mode>] <paths>` | ✅ |
+| `makeSymlink(src, dest, opts)` | `make_symlink(src, dest, MakeSymlinkOpts)` → `Template` | Builds `ln -s [-f] <src> <dest>` | ✅ |
+| `runCmd(command, opts)` | `run_cmd(command, RunCmdOpts)` → `Template` | Single `RUN` instruction | ✅ |
+| `runCmds(commands, opts)` | `run_cmds(&[&str], RunCmdOpts)` → `Template` | Joined with `&&`; single layer | ✅ |
+| `setWorkdir(path)` | `set_workdir(path)` → `Template` | `WORKDIR` instruction | ✅ |
+| `setUser(user)` | `set_user(user)` → `Template` | `USER` instruction | ✅ |
+| `setEnvs(envs)` | `set_envs(BTreeMap<String,String>)` → `Template` | `ENV` instruction; keys sorted by `BTreeMap` (ascending) vs JS insertion order — carry-forward | ✅ |
+| `pipInstall(packages, opts)` | `pip_install(&[&str], PipInstallOpts)` → `Template` | `global` defaults `true`; runs as root when global | ✅ |
+| `npmInstall(packages, opts)` | `npm_install(&[&str], NpmInstallOpts)` → `Template` | `-g` when global; `--save-dev` when dev | ✅ |
+| `bunInstall(packages, opts)` | `bun_install(&[&str], BunInstallOpts)` → `Template` | `-g` when global; `--dev` when dev | ✅ |
+| `aptInstall(packages, opts)` | `apt_install(&[&str], AptInstallOpts)` → `Template` | `apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y …` | ✅ |
+| `gitClone(url, path, opts)` | `git_clone(url, Option<&str>, GitCloneOpts)` → `Template` | `template::GitCloneOpts` (at `e2b_rs::template::GitCloneOpts`) to avoid conflict with sandbox `GitCloneOpts` | ✅ |
+| `addMcpServer(…)` | _(DEFERRED — user decision; no generated type exposed)_ | | ⬜ |
+| `betaDevContainerPrebuild(…)` | _(DEFERRED — user decision)_ | | ⬜ |
+| `betaSetDevContainerStart(…)` | _(DEFERRED — user decision)_ | | ⬜ |
+
+**Notes:**
+- `set_envs` orders keys ascending via `BTreeMap` iteration rather than JS insertion order — this is a documented carry-forward for determinism.
+- Per-layer `forceNextLayer` in the JS SDK is simplified to a template-level `force` flag (`skip_cache()`) in `e2b-rs` — carry-forward.
+- `template::GitCloneOpts` lives at `e2b_rs::template::GitCloneOpts`; the crate root `e2b_rs::GitCloneOpts` re-exports the sandbox git one to avoid naming conflict.
+- All new opt structs (`CopyOpts`, `RemoveOpts`, `RenameOpts`, `MakeDirOpts`, `MakeSymlinkOpts`, `RunCmdOpts`, `PipInstallOpts`, `NpmInstallOpts`, `BunInstallOpts`, `AptInstallOpts`) are re-exported at the crate root — EXCEPT `GitCloneOpts`, which is reachable only via `e2b_rs::template::GitCloneOpts` (the crate-root `e2b_rs::GitCloneOpts` is the sandbox-git one).

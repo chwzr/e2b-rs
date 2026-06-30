@@ -102,13 +102,24 @@
 //!
 //! ## Templates
 //!
+//! Build a custom sandbox image from a Python base, copy in a requirements
+//! file, install dependencies, and start your app — all through a fluent
+//! builder chain:
+//!
 //! ```no_run
 //! # async fn run() -> e2b_rs::Result<()> {
 //! use e2b_rs::Template;
-//! let template = Template::new()
-//!     .from_image("node:20")
-//!     .set_start_cmd("npm start", e2b_rs::wait_for_timeout(20_000));
-//! let mut build = template.build("my-template", Default::default()).await?;
+//! // Start with a Python 3.12 base image.
+//! let template = Template::new().from_python_image("3.12");
+//! // copy() returns Result<Template>, so break the chain here with `?`.
+//! let template = template.copy("requirements.txt", "/app/", Default::default())?;
+//! // Remaining methods all return Template — chain them freely.
+//! let template = template
+//!     .run_cmd("pip install -r /app/requirements.txt", Default::default())
+//!     .set_workdir("/app")
+//!     .set_start_cmd("python app.py", e2b_rs::wait_for_timeout(20_000));
+//! // Trigger the build and stream log entries until it completes.
+//! let mut build = template.build("my-app", Default::default()).await?;
 //! while let Some(log) = build.next().await {
 //!     println!("{log}");
 //! }
@@ -141,11 +152,15 @@ pub mod volume;
 pub mod template;
 
 pub use template::{
-    BuildHandle, BuildInfo, BuildOptions, BuildStatus, BuildStatusReason, CopyItem, Instruction,
-    InstructionType, LogEntry, LogEntryLevel, ReadyCmd, RegistryConfig, Template, TemplateApiOpts,
-    TemplateBuildStatusResponse, TemplateTag, TemplateTagInfo, wait_for_file, wait_for_port,
-    wait_for_process, wait_for_timeout, wait_for_url,
+    AptInstallOpts, BuildHandle, BuildInfo, BuildOptions, BuildStatus, BuildStatusReason,
+    BunInstallOpts, CopyItem, CopyOpts, Instruction, InstructionType, LogEntry, LogEntryLevel,
+    MakeDirOpts, MakeSymlinkOpts, NpmInstallOpts, PipInstallOpts, ReadyCmd, RegistryConfig,
+    RemoveOpts, RenameOpts, RunCmdOpts, Template, TemplateApiOpts, TemplateBuildStatusResponse,
+    TemplateTag, TemplateTagInfo, wait_for_file, wait_for_port, wait_for_process, wait_for_timeout,
+    wait_for_url,
 };
+// Note: `template::GitCloneOpts` is accessible via `e2b_rs::template::GitCloneOpts` to avoid
+// conflict with `sandbox::GitCloneOpts` which is re-exported as `e2b_rs::GitCloneOpts`.
 
 pub(crate) mod api;
 

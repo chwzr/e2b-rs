@@ -28,7 +28,11 @@ pub mod tags;
 pub mod types;
 pub(crate) mod upload;
 
-pub use builder::{BuildOptions, RegistryConfig, Template};
+pub use builder::{
+    AptInstallOpts, BuildOptions, BunInstallOpts, CopyOpts, GitCloneOpts, MakeDirOpts,
+    MakeSymlinkOpts, NpmInstallOpts, PipInstallOpts, RegistryConfig, RemoveOpts, RenameOpts,
+    RunCmdOpts, Template,
+};
 pub use handle::BuildHandle;
 pub use log::{LogEntry, LogEntryLevel};
 pub use readycmd::{
