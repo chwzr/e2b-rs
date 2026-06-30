@@ -212,6 +212,22 @@ impl Commands {
             .map(|_| ())
     }
 
+    /// Reconnect to a running process by pid, returning a [`CommandHandle`].
+    pub async fn connect(&self, pid: u32, user: Option<&str>) -> Result<CommandHandle> {
+        let user = self.resolve_user(user);
+        let req = pb::ConnectRequest {
+            process: Some(pid_selector(pid)),
+        };
+        open_handle(
+            Arc::clone(&self.connect),
+            crate::connect::PROC_CONNECT,
+            &req,
+            user.as_deref(),
+            &self.envd_version,
+        )
+        .await
+    }
+
     /// Close a process's stdin (requires envd >= `ENVD_ENVD_CLOSE`).
     pub async fn close_stdin(&self, pid: u32) -> Result<()> {
         if !version_gte(&self.envd_version, crate::envd::versions::ENVD_ENVD_CLOSE) {
@@ -319,6 +335,42 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].pid, 11);
         assert_eq!(out[0].cmd, "/bin/bash");
+    }
+
+    #[tokio::test]
+    async fn connect_reattaches_to_process() {
+        let server = MockServer::start().await;
+        let mut body = encode_envelope(0, br#"{"event":{"start":{"pid":5}}}"#);
+        body.extend(encode_envelope(
+            0,
+            br#"{"event":{"data":{"stdout":"aGk="}}}"#,
+        ));
+        body.extend(encode_envelope(
+            0,
+            br#"{"event":{"end":{"exitCode":0,"exited":true,"status":"exited"}}}"#,
+        ));
+        body.extend(encode_envelope(FLAG_END_STREAM, b"{}"));
+        // NOTE: body_partial_json cannot match enveloped streaming bodies (the
+        // 5-byte binary envelope header makes the body non-JSON). Match only on
+        // method + path; the pid and output assertions fully verify the contract.
+        Mock::given(method("POST"))
+            .and(path("/process.Process/Connect"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/connect+json")
+                    .set_body_bytes(body),
+            )
+            .mount(&server)
+            .await;
+        let mut handle = build_with_connect(connect_for(&server), "0.6.3")
+            .connect(5, None)
+            .await
+            .expect("connect");
+        assert_eq!(handle.pid(), 5);
+        assert!(matches!(
+            handle.next().await,
+            Some(CommandOutput::Stdout(_))
+        ));
     }
 
     #[tokio::test]
