@@ -185,4 +185,31 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 
 ## Template (Plan 5)
 
-_Rows added when Plan 5 lands._
+### 5a — Foundation
+
+| JS (`src/template/...`) | Rust (`e2b_rs::...`) | Status |
+|---|---|---|
+| `readycmd.ts` `ReadyCmd` | `ReadyCmd` | ✅ |
+| `readycmd.ts` `waitForPort` | `wait_for_port` | ✅ |
+| `readycmd.ts` `waitForURL` | `wait_for_url` | ✅ |
+| `readycmd.ts` `waitForProcess` | `wait_for_process` | ✅ |
+| `readycmd.ts` `waitForFile` | `wait_for_file` | ✅ |
+| `readycmd.ts` `waitForTimeout` | `wait_for_timeout` | ✅ |
+| `logger.ts` `LogEntry` / `LogEntryLevel` | `LogEntry` / `LogEntryLevel` | ✅ |
+| `types.ts` `TemplateBuildStatus` | `BuildStatus` | ✅ |
+| `types.ts` `BuildStatusReason` | `BuildStatusReason` | ✅ |
+| `types.ts` `TemplateTag` | `TemplateTag` | ✅ |
+| `types.ts` `TemplateBuildStatusResponse` | `TemplateBuildStatusResponse` | ✅ |
+| `types.ts` `BuildInfo` | `BuildInfo` (+ `from_wire` from `TemplateRequestResponseV3`) | ✅ |
+| `types.ts` `InstructionType` | `InstructionType` | ✅ |
+| `types.ts` `Instruction` | `Instruction` | ✅ |
+| `types.ts` `CopyItem` | `CopyItem` | ✅ |
+
+**Notes:**
+- Build logs are delivered via a `tokio::sync::mpsc` channel (Plan 5c), not callbacks — the JS `onBuildLogs` callback parameter has no direct Rust equivalent.
+- The build pipeline (HTTP build trigger, build-status polling, log streaming), Dockerfile parser, file upload/hashing, and builder methods (`fromImage`, `copy`, `runCmd`, etc.) are Plans 5b–5d (placeholders below).
+- `addMcpServer`, devcontainer-beta (`betaDevContainerPrebuild`/`betaSetDevContainerStart`), and the CLI animated logger are **DEFERRED** (user decision — not planned for initial release).
+
+### 5b–5d — Build pipeline, Dockerfile parser, file upload, builder methods
+
+_Rows added when Plans 5b–5d land._
