@@ -79,7 +79,7 @@ pub mod sandbox;
 
 pub use sandbox::signature::{Signature, SignatureOperation, get_signature, get_signature_now};
 pub use sandbox::{
-    EntryInfo, FileType, FilesystemEvent, FilesystemEventType, NetworkRule, Sandbox,
+    EntryInfo, FileType, Filesystem, FilesystemEvent, FilesystemEventType, NetworkRule, Sandbox,
     SandboxConnectBuilder, SandboxConnectOpts, SandboxCreateBuilder, SandboxCreateOpts,
     SandboxInfo, SandboxListOpts, SandboxMetrics, SandboxNetworkUpdate, SandboxPaginator,
     SandboxState, SandboxUrlOpts, SnapshotInfo, SnapshotListOpts, SnapshotPaginator, WriteEntry,

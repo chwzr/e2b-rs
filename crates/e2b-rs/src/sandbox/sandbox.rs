@@ -43,6 +43,8 @@ pub struct Sandbox {
     pub(crate) config: ConnectionConfig,
     /// Control-plane API client.
     pub(crate) api: ApiClient,
+    /// Filesystem operations (sandbox.files).
+    pub(crate) files: crate::sandbox::filesystem::Filesystem,
 }
 
 impl Sandbox {
@@ -261,15 +263,32 @@ impl Sandbox {
         s: crate::api::schema::Sandbox,
         config: ConnectionConfig,
         api: ApiClient,
-    ) -> Sandbox {
-        Sandbox {
+    ) -> Result<Sandbox> {
+        let sandbox_domain = s.domain.clone();
+        let domain = sandbox_domain
+            .clone()
+            .unwrap_or_else(|| config.domain.clone());
+        let files = crate::sandbox::filesystem::Filesystem::build(
+            &s.sandbox_id,
+            &domain,
+            &s.envd_version.0,
+            s.envd_access_token.as_deref(),
+            &config,
+        )?;
+        Ok(Sandbox {
             sandbox_id: s.sandbox_id,
-            sandbox_domain: s.domain,
+            sandbox_domain,
             envd_version: s.envd_version.0,
             envd_access_token: s.envd_access_token,
             config,
             api,
-        }
+            files,
+        })
+    }
+
+    /// Access the sandbox filesystem (`read`/`write`/`list`/`watch`/...).
+    pub fn files(&self) -> &crate::sandbox::filesystem::Filesystem {
+        &self.files
     }
 }
 
@@ -361,7 +380,7 @@ impl IntoFuture for SandboxCreateBuilder {
             let config = ConnectionConfig::new(self.opts.connection.clone());
             let api = ApiClient::new(&config, true)?;
             let sandbox = api::create_sandbox(&api, &self.opts).await?;
-            Ok(Sandbox::from_api_sandbox(sandbox, config, api))
+            Sandbox::from_api_sandbox(sandbox, config, api)
         })
     }
 }
@@ -410,7 +429,7 @@ impl IntoFuture for SandboxConnectBuilder {
                 crate::connection_config::DEFAULT_SANDBOX_TIMEOUT_MS,
             ));
             let sandbox = api::connect_sandbox(&api, &self.sandbox_id, timeout).await?;
-            Ok(Sandbox::from_api_sandbox(sandbox, config, api))
+            Sandbox::from_api_sandbox(sandbox, config, api)
         })
     }
 }
@@ -431,6 +450,10 @@ mod tests {
             },
         );
         let api = ApiClient::new(&config, true).expect("api");
+        let files = crate::sandbox::filesystem::Filesystem::build(
+            "sbx_u", "e2b.app", "0.6.0", token, &config,
+        )
+        .expect("files");
         Sandbox {
             sandbox_id: "sbx_u".to_string(),
             sandbox_domain: Some("e2b.app".to_string()),
@@ -438,6 +461,7 @@ mod tests {
             envd_access_token: token.map(str::to_string),
             config,
             api,
+            files,
         }
     }
 
