@@ -15,14 +15,16 @@ use crate::errors::{Error, Result};
 use crate::volume::schema::Error as VolumeError;
 
 /// Default timeout for file read/write operations (1 hour).
-const FILE_TIMEOUT_MS: u64 = 3_600_000;
+///
+/// Used by [`super::control::Volume`] when building a content client for file
+/// I/O methods (`read_file`, `read_file_bytes`, `read_file_stream`, `write_file`).
+pub(crate) const FILE_TIMEOUT_MS: u64 = 3_600_000;
 
 /// HTTP client for the E2B volume content API, authenticated with a short-lived
 /// Bearer token obtained from the control-plane API.
 ///
 /// The token is baked into the client's default headers so every request is
 /// automatically authenticated.
-#[allow(dead_code)] // methods wired up in later tasks
 pub(crate) struct VolumeApiClient {
     /// Underlying reqwest client with `Authorization: Bearer` baked in.
     http: reqwest::Client,
@@ -32,7 +34,6 @@ pub(crate) struct VolumeApiClient {
     file_timeout_ms: u64,
 }
 
-#[allow(dead_code)] // methods wired up in later tasks
 impl VolumeApiClient {
     /// Build a new client.
     ///
@@ -184,7 +185,7 @@ impl VolumeApiClient {
         path: &str,
         query: &[(&str, String)],
         idle_timeout_ms: u64,
-    ) -> Result<impl Stream<Item = Result<Bytes>>> {
+    ) -> Result<impl Stream<Item = Result<Bytes>> + use<>> {
         let timeout_ms = if idle_timeout_ms > 0 {
             idle_timeout_ms
         } else {

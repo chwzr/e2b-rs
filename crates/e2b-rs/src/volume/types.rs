@@ -119,7 +119,6 @@ pub struct VolumeMakeDirOpts {
     pub force: Option<bool>,
 }
 
-#[allow(dead_code)] // from_wire called by Volume methods in later tasks
 impl VolumeEntryStat {
     /// Map from the internal wire type [`crate::volume::schema::VolumeEntryStat`]
     /// to this public struct.
@@ -147,7 +146,6 @@ impl VolumeEntryStat {
     }
 }
 
-#[allow(dead_code)] // from_wire called by Volume API methods in later tasks
 impl VolumeInfo {
     /// Map from the generated [`crate::api::schema::Volume`] wire type.
     pub(crate) fn from_wire(w: crate::api::schema::Volume) -> VolumeInfo {
@@ -158,7 +156,6 @@ impl VolumeInfo {
     }
 }
 
-#[allow(dead_code)] // from_wire called by Volume API methods in later tasks
 impl VolumeAndToken {
     /// Map from the generated [`crate::api::schema::VolumeAndToken`] wire type.
     pub(crate) fn from_wire(w: crate::api::schema::VolumeAndToken) -> VolumeAndToken {

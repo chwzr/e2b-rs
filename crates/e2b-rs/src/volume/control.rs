@@ -13,7 +13,7 @@ use crate::connection_config::{ConnectionConfig, ConnectionConfigOpts, REQUEST_T
 use crate::errors::{Error, Result};
 use crate::volume::types::{
     VolumeAndToken, VolumeEntryStat, VolumeInfo, VolumeListOpts, VolumeMakeDirOpts,
-    VolumeMetadataOpts,
+    VolumeMetadataOpts, VolumeReadOpts, VolumeWriteOpts,
 };
 
 /// Default per-request timeout stored in [`Volume`] when
@@ -374,6 +374,11 @@ impl Volume {
     /// Remove the file or directory at `path`.
     ///
     /// Mirrors JS `volume.remove(path)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::Error::NotFound`] with the message
+    /// `"Path {path} not found"` on HTTP 404, mirroring the JS error message.
     pub async fn remove(&self, path: &str) -> Result<()> {
         let client = self.build_content_client()?;
         let endpoint = format!("/volumecontent/{}/path", self.volume_id);
@@ -381,6 +386,10 @@ impl Volume {
         client
             .request_unit(reqwest::Method::DELETE, &endpoint, &query, None::<&()>)
             .await
+            .map_err(|e| match e {
+                Error::NotFound(_) => Error::NotFound(format!("Path {path} not found")),
+                other => other,
+            })
     }
 
     /// Return `true` if the path exists in the volume, `false` if it does not.
@@ -393,6 +402,151 @@ impl Volume {
             Err(Error::NotFound(_)) => Ok(false),
             Err(e) => Err(e),
         }
+    }
+}
+
+// ── Volume-content file I/O ──────────────────────────────────────────────────
+
+impl Volume {
+    /// Build a [`crate::volume::client::VolumeApiClient`] with the 1-hour file
+    /// timeout.
+    ///
+    /// File read/write operations can take a long time for large files, so
+    /// they must use [`crate::volume::client::FILE_TIMEOUT_MS`] (1 hour) rather
+    /// than the 60-second metadata default stored in `self.request_timeout_ms`.
+    /// This mirrors the JS SDK's `readFile`/`writeFile` which pass
+    /// `requestTimeoutMs: opts?.requestTimeoutMs ?? FILE_TIMEOUT_MS`.
+    fn build_file_client(&self) -> Result<crate::volume::client::VolumeApiClient> {
+        crate::volume::client::VolumeApiClient::new(
+            &self.api_url,
+            &self.token,
+            crate::volume::client::FILE_TIMEOUT_MS,
+            self.proxy.as_deref(),
+        )
+    }
+
+    /// Read the file at `path` and return its contents as a UTF-8 `String`.
+    ///
+    /// Sends `GET /volumecontent/{id}/file` with `path` as a query parameter.
+    /// Uses the 1-hour file timeout (mirrors JS `readFile(path)` / `format: 'text'`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::Error::NotFound`] with the message
+    /// `"Path {path} not found"` on HTTP 404.
+    ///
+    /// Returns [`crate::errors::Error::Internal`] if the file contents are not
+    /// valid UTF-8 (matches JS strict `.text()` decode behaviour).
+    pub async fn read_file(&self, path: &str) -> Result<String> {
+        let client = self.build_file_client()?;
+        let endpoint = format!("/volumecontent/{}/file", self.volume_id);
+        let query: Vec<(&str, String)> = vec![("path", path.to_string())];
+        let bytes = client
+            .read_bytes(&endpoint, &query)
+            .await
+            .map_err(|e| match e {
+                Error::NotFound(_) => Error::NotFound(format!("Path {path} not found")),
+                other => other,
+            })?;
+        String::from_utf8(bytes)
+            .map_err(|e| Error::Internal(format!("volume file is not valid UTF-8: {e}")))
+    }
+
+    /// Read the raw bytes of the file at `path`.
+    ///
+    /// Sends `GET /volumecontent/{id}/file` with `path` as a query parameter.
+    /// Uses the 1-hour file timeout (mirrors JS `readFile(path, { format: 'bytes' })`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::Error::NotFound`] with the message
+    /// `"Path {path} not found"` on HTTP 404.
+    pub async fn read_file_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let client = self.build_file_client()?;
+        let endpoint = format!("/volumecontent/{}/file", self.volume_id);
+        let query: Vec<(&str, String)> = vec![("path", path.to_string())];
+        client
+            .read_bytes(&endpoint, &query)
+            .await
+            .map_err(|e| match e {
+                Error::NotFound(_) => Error::NotFound(format!("Path {path} not found")),
+                other => other,
+            })
+    }
+
+    /// Stream the bytes of the file at `path`.
+    ///
+    /// Sends `GET /volumecontent/{id}/file` with `path` as a query parameter
+    /// and returns a byte stream. The idle timeout defaults to the 1-hour file
+    /// timeout and can be overridden via [`VolumeReadOpts::stream_idle_timeout_ms`].
+    ///
+    /// Mirrors JS `readFile(path, { format: 'stream' })`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::Error::NotFound`] with the message
+    /// `"Path {path} not found"` on HTTP 404.
+    pub async fn read_file_stream(
+        &self,
+        path: &str,
+        opts: VolumeReadOpts,
+    ) -> Result<impl futures::Stream<Item = Result<bytes::Bytes>>> {
+        let client = self.build_file_client()?;
+        let endpoint = format!("/volumecontent/{}/file", self.volume_id);
+        let query: Vec<(&str, String)> = vec![("path", path.to_string())];
+        let idle_timeout = opts
+            .stream_idle_timeout_ms
+            .unwrap_or(crate::volume::client::FILE_TIMEOUT_MS);
+        client
+            .read_stream(&endpoint, &query, idle_timeout)
+            .await
+            .map_err(|e| match e {
+                Error::NotFound(_) => Error::NotFound(format!("Path {path} not found")),
+                other => other,
+            })
+    }
+
+    /// Write `data` to the file at `path`, creating or overwriting it.
+    ///
+    /// Sends `PUT /volumecontent/{id}/file` with `path` and optional ownership /
+    /// permission query parameters. The body is sent as `application/octet-stream`.
+    /// Uses the 1-hour file timeout (mirrors JS `writeFile(path, data, opts)`).
+    ///
+    /// Returns the [`VolumeEntryStat`] of the written file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::Error::NotFound`] with the message
+    /// `"Path {path} not found"` on HTTP 404.
+    pub async fn write_file(
+        &self,
+        path: &str,
+        data: impl Into<Vec<u8>>,
+        opts: VolumeWriteOpts,
+    ) -> Result<VolumeEntryStat> {
+        let client = self.build_file_client()?;
+        let endpoint = format!("/volumecontent/{}/file", self.volume_id);
+        let mut query: Vec<(&str, String)> = vec![("path", path.to_string())];
+        if let Some(u) = opts.uid {
+            query.push(("uid", u.to_string()));
+        }
+        if let Some(g) = opts.gid {
+            query.push(("gid", g.to_string()));
+        }
+        if let Some(m) = opts.mode {
+            query.push(("mode", m.to_string()));
+        }
+        if let Some(f) = opts.force {
+            query.push(("force", if f { "true" } else { "false" }.to_string()));
+        }
+        let stat: crate::volume::schema::VolumeEntryStat = client
+            .write_bytes(&endpoint, &query, data.into())
+            .await
+            .map_err(|e| match e {
+                Error::NotFound(_) => Error::NotFound(format!("Path {path} not found")),
+                other => other,
+            })?;
+        Ok(VolumeEntryStat::from_wire(stat))
     }
 }
 
@@ -554,7 +708,8 @@ mod tests {
     // ── Content-method tests ─────────────────────────────────────────────────
 
     use crate::volume::types::{
-        VolumeFileType, VolumeListOpts, VolumeMakeDirOpts, VolumeMetadataOpts,
+        VolumeFileType, VolumeListOpts, VolumeMakeDirOpts, VolumeMetadataOpts, VolumeReadOpts,
+        VolumeWriteOpts,
     };
     use wiremock::matchers::query_param;
 
@@ -753,6 +908,138 @@ mod tests {
 
         let vol = vol_for(&server);
         let err = vol.stat("/gone").await.expect_err("stat should Err on 404");
+        assert!(
+            matches!(&err, Error::NotFound(msg) if msg.contains("/gone")),
+            "expected NotFound with path in message, got: {err:?}",
+        );
+    }
+
+    // ── File I/O tests (Task 4) ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn read_file_text() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/volumecontent/vol_1/file"))
+            .and(query_param("path", "/a.txt"))
+            .and(header("Authorization", "Bearer tkn"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(b"hello" as &[u8])
+                    .append_header("Content-Type", "application/octet-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        let text = vol.read_file("/a.txt").await.expect("read_file ok");
+        assert_eq!(text, "hello");
+    }
+
+    #[tokio::test]
+    async fn read_file_bytes_returns_raw() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/volumecontent/vol_1/file"))
+            .and(query_param("path", "/a.txt"))
+            .and(header("Authorization", "Bearer tkn"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(b"hello" as &[u8])
+                    .append_header("Content-Type", "application/octet-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        let bytes = vol
+            .read_file_bytes("/a.txt")
+            .await
+            .expect("read_file_bytes ok");
+        assert_eq!(bytes, b"hello".to_vec());
+    }
+
+    #[tokio::test]
+    async fn read_file_stream_collects() {
+        use futures::StreamExt as _;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/volumecontent/vol_1/file"))
+            .and(query_param("path", "/a.txt"))
+            .and(header("Authorization", "Bearer tkn"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(b"hello" as &[u8])
+                    .append_header("Content-Type", "application/octet-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        let stream = vol
+            .read_file_stream("/a.txt", VolumeReadOpts::default())
+            .await
+            .expect("read_file_stream ok");
+        let chunks: Vec<bytes::Bytes> = stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .expect("collect stream chunks");
+        let combined: Vec<u8> = chunks.into_iter().flat_map(|b| b.to_vec()).collect();
+        assert_eq!(combined, b"hello");
+    }
+
+    #[tokio::test]
+    async fn write_file_puts_octet_stream() {
+        let server = MockServer::start().await;
+        let response_json = entry_json("a.txt", "/a.txt", "file");
+        Mock::given(method("PUT"))
+            .and(path("/volumecontent/vol_1/file"))
+            .and(query_param("path", "/a.txt"))
+            .and(query_param("uid", "1000"))
+            .and(header("Authorization", "Bearer tkn"))
+            .and(header("Content-Type", "application/octet-stream"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_json))
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        let entry = vol
+            .write_file(
+                "/a.txt",
+                b"hello".to_vec(),
+                VolumeWriteOpts {
+                    uid: Some(1000),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("write_file ok");
+        assert_eq!(entry.file_type, VolumeFileType::File);
+        assert_eq!(entry.path, "/a.txt");
+    }
+
+    #[tokio::test]
+    async fn remove_404_path_message() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/volumecontent/vol_1/path"))
+            .and(query_param("path", "/gone"))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_json(
+                    serde_json::json!({"code": "not_found", "message": "not found"}),
+                ),
+            )
+            .mount(&server)
+            .await;
+
+        let vol = vol_for(&server);
+        let err = vol
+            .remove("/gone")
+            .await
+            .expect_err("remove should Err on 404");
         assert!(
             matches!(&err, Error::NotFound(msg) if msg.contains("/gone")),
             "expected NotFound with path in message, got: {err:?}",
