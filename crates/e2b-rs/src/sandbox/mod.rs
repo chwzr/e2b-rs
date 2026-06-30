@@ -13,7 +13,9 @@ pub(crate) mod snapshot_paginator;
 pub mod types;
 
 pub use network::{NetworkRule, SandboxNetworkUpdate};
-pub use opts::{SandboxConnectOpts, SandboxCreateOpts, SandboxListOpts, SnapshotListOpts};
+pub use opts::{
+    SandboxConnectOpts, SandboxCreateOpts, SandboxListOpts, SandboxUrlOpts, SnapshotListOpts,
+};
 pub use paginator::SandboxPaginator;
 pub use sandbox::{Sandbox, SandboxConnectBuilder, SandboxCreateBuilder};
 pub use snapshot_paginator::SnapshotPaginator;

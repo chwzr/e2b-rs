@@ -58,6 +58,16 @@ pub struct SnapshotListOpts {
     pub connection: ConnectionConfigOpts,
 }
 
+/// Options for building signed file URLs ([`Sandbox::upload_url`] /
+/// [`Sandbox::download_url`]).
+#[derive(Default)]
+pub struct SandboxUrlOpts {
+    /// The sandbox user the URL authorizes (defaults to `user` on older envd).
+    pub user: Option<String>,
+    /// If set, produce an expiring signature valid for this many seconds.
+    pub signature_expiration_secs: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
