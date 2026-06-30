@@ -3,7 +3,7 @@
 
 pub(crate) mod api;
 pub(crate) mod mcp_gen;
-pub mod network;
+pub(crate) mod network;
 pub mod opts;
 pub(crate) mod paginator;
 #[allow(clippy::module_inception)] // `sandbox.rs` inside the `sandbox` module is intentional
