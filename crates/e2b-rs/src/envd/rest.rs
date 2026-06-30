@@ -11,6 +11,20 @@ use crate::logs::Logger;
 /// Health-check timeout for envd, matching `checkSandboxHealth` (5 s).
 const HEALTH_TIMEOUT_MS: u64 = 5_000;
 
+/// One element of the `POST /files` JSON response.
+#[derive(serde::Deserialize)]
+pub(crate) struct WriteInfoWire {
+    /// Base name of the written file.
+    pub name: String,
+    /// File type string (e.g. `"FILE_TYPE_FILE"`).
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+    /// Absolute path of the written file.
+    pub path: String,
+    /// Metadata persisted on the file, if any.
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+}
+
 /// Options for constructing an [`EnvdApiClient`].
 #[allow(dead_code)] // used by Plan 3
 pub(crate) struct EnvdApiClientOpts {
@@ -111,6 +125,91 @@ impl EnvdApiClient {
         }
         let body = resp.text().await.unwrap_or_default();
         Err(crate::errors::Error::from_status(status.as_u16(), &body))
+    }
+
+    /// `POST {base}/files` with a prepared body + content-type. `path` is sent as
+    /// a query param for single-file writes (omitted for multi-file). Maps non-2xx
+    /// to an error; parses the `WriteInfo[]` JSON response.
+    pub(crate) async fn post_files(
+        &self,
+        path: Option<&str>,
+        user: Option<&str>,
+        body: reqwest::Body,
+        content_type: &str,
+        content_encoding: Option<&str>,
+        metadata_headers: &[(String, String)],
+    ) -> crate::errors::Result<Vec<WriteInfoWire>> {
+        let url = format!("{}/files", self.base_url);
+        let mut query: Vec<(&str, String)> = Vec::new();
+        if let Some(path) = path {
+            query.push(("path", path.to_string()));
+        }
+        if let Some(user) = user {
+            query.push(("username", user.to_string()));
+        }
+        let mut rb = self
+            .http
+            .post(&url)
+            .timeout(self.request_timeout)
+            .query(&query)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(body);
+        if let Some(enc) = content_encoding {
+            rb = rb.header(reqwest::header::CONTENT_ENCODING, enc);
+        }
+        for (name, value) in metadata_headers {
+            rb = rb.header(name.as_str(), value.as_str());
+        }
+        let resp = rb.send().await?;
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+        if !status.is_success() {
+            let msg = String::from_utf8_lossy(&bytes).to_string();
+            return Err(crate::errors::Error::from_status(status.as_u16(), &msg));
+        }
+        serde_json::from_slice::<Vec<WriteInfoWire>>(&bytes).map_err(|e| {
+            crate::errors::Error::Internal(format!("failed to decode write response: {e}"))
+        })
+    }
+
+    /// `POST {base}/files` as `multipart/form-data` (reqwest sets the
+    /// content-type + boundary). Used for the multipart write path. `path` is
+    /// sent as a query for single-file writes (the filename in the form part
+    /// also carries it); omitted for multi-file writes.
+    pub(crate) async fn post_files_multipart(
+        &self,
+        path: Option<&str>,
+        user: Option<&str>,
+        form: reqwest::multipart::Form,
+        metadata_headers: &[(String, String)],
+    ) -> crate::errors::Result<Vec<WriteInfoWire>> {
+        let url = format!("{}/files", self.base_url);
+        let mut query: Vec<(&str, String)> = Vec::new();
+        if let Some(path) = path {
+            query.push(("path", path.to_string()));
+        }
+        if let Some(user) = user {
+            query.push(("username", user.to_string()));
+        }
+        let mut rb = self
+            .http
+            .post(&url)
+            .timeout(self.request_timeout)
+            .query(&query)
+            .multipart(form);
+        for (name, value) in metadata_headers {
+            rb = rb.header(name.as_str(), value.as_str());
+        }
+        let resp = rb.send().await?;
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+        if !status.is_success() {
+            let msg = String::from_utf8_lossy(&bytes).to_string();
+            return Err(crate::errors::Error::from_status(status.as_u16(), &msg));
+        }
+        serde_json::from_slice::<Vec<WriteInfoWire>>(&bytes).map_err(|e| {
+            crate::errors::Error::Internal(format!("failed to decode write response: {e}"))
+        })
     }
 
     /// Probe `GET /health` and return:

@@ -14,7 +14,8 @@ pub(crate) mod snapshot_paginator;
 pub mod types;
 
 pub use filesystem::{
-    EntryInfo, FileType, Filesystem, FilesystemEvent, FilesystemEventType, WriteEntry, WriteInfo,
+    EntryInfo, FileType, Filesystem, FilesystemEvent, FilesystemEventType, FsWriteOpts, WriteEntry,
+    WriteInfo,
 };
 pub use network::{NetworkRule, SandboxNetworkUpdate};
 pub use opts::{

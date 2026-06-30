@@ -3,6 +3,7 @@
 pub(crate) mod io;
 pub mod types;
 
+pub use io::FsWriteOpts;
 pub use types::{EntryInfo, FileType, FilesystemEvent, FilesystemEventType, WriteEntry, WriteInfo};
 
 use crate::connect::client::{ConnectClient, ConnectClientOpts};
@@ -29,7 +30,6 @@ pub struct Filesystem {
     /// REST client for the envd `/files` surface (used by Tasks 3–5).
     pub(crate) rest: EnvdApiClient,
     /// envd version string; used by version gates (used by Tasks 3–6).
-    #[allow(dead_code)]
     pub(crate) envd_version: String,
     /// Legacy default user (set on old envd < 0.4.0, `None` on modern envd).
     pub(crate) default_user: Option<String>,
@@ -347,6 +347,45 @@ mod tests {
             .mount(&server)
             .await;
         assert!(!fs_for(&server).make_dir("/d", None).await.expect("makedir"));
+    }
+
+    #[tokio::test]
+    async fn write_single_octet_stream_returns_info() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/files"))
+            .and(wiremock::matchers::query_param("path", "/w.txt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "name": "w.txt", "type": "FILE_TYPE_FILE", "path": "/w.txt", "metadata": {} }
+            ])))
+            .mount(&server)
+            .await;
+        let fs = fs_for(&server);
+        let opts = crate::sandbox::filesystem::FsWriteOpts {
+            use_octet_stream: Some(true),
+            ..Default::default()
+        };
+        let info = fs
+            .write("/w.txt", b"hi".to_vec(), opts)
+            .await
+            .expect("write");
+        assert_eq!(info.path, "/w.txt");
+    }
+
+    #[tokio::test]
+    async fn write_rejects_metadata_on_old_envd() {
+        // fs_for uses envd 0.6.3 >= 0.6.2, so build an old-envd fs explicitly.
+        let server = MockServer::start().await;
+        let config = ConnectionConfig::new(ConnectionConfigOpts::default());
+        let fs = Filesystem::build_with_base_url(server.uri(), "sbx", "0.6.1", None, &config)
+            .expect("fs");
+        let mut opts = crate::sandbox::filesystem::FsWriteOpts::default();
+        opts.metadata.insert("k".into(), "v".into());
+        let err = fs
+            .write("/w.txt", b"hi".to_vec(), opts)
+            .await
+            .expect_err("gate");
+        assert!(matches!(err, crate::errors::Error::Template(_)));
     }
 
     #[tokio::test]
