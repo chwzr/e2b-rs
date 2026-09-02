@@ -156,8 +156,8 @@ pub use template::{
     BunInstallOpts, CopyItem, CopyOpts, Instruction, InstructionType, LogEntry, LogEntryLevel,
     MakeDirOpts, MakeSymlinkOpts, NpmInstallOpts, PipInstallOpts, ReadyCmd, RegistryConfig,
     RemoveOpts, RenameOpts, RunCmdOpts, Template, TemplateApiOpts, TemplateBuildStatusResponse,
-    TemplateTag, TemplateTagInfo, wait_for_file, wait_for_port, wait_for_process, wait_for_timeout,
-    wait_for_url,
+    TemplateListItem, TemplateTag, TemplateTagInfo, wait_for_file, wait_for_port, wait_for_process,
+    wait_for_timeout, wait_for_url,
 };
 // Note: `template::GitCloneOpts` is accessible via `e2b_rs::template::GitCloneOpts` to avoid
 // conflict with `sandbox::GitCloneOpts` which is re-exported as `e2b_rs::GitCloneOpts`.
@@ -189,11 +189,11 @@ pub use sandbox::{
     GitCloneOpts, GitCommitOpts, GitConfigOpts, GitConfigScope, GitDangerouslyAuthenticateOpts,
     GitDeleteBranchOpts, GitFileStatus, GitInitOpts, GitPullOpts, GitPushOpts, GitRemoteAddOpts,
     GitRequestOpts, GitResetMode, GitResetOpts, GitRestoreOpts, GitStatus, GitStatusLabel,
-    NetworkRule, ProcessInfo, Pty, PtyCreateOpts, PtySize, Sandbox, SandboxConnectBuilder,
-    SandboxConnectOpts, SandboxCreateBuilder, SandboxCreateOpts, SandboxInfo, SandboxListOpts,
-    SandboxMetrics, SandboxNetworkUpdate, SandboxPaginator, SandboxState, SandboxUrlOpts,
-    SnapshotInfo, SnapshotListOpts, SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry,
-    WriteInfo,
+    NetworkRule, OnTimeout, ProcessInfo, Pty, PtyCreateOpts, PtySize, Sandbox,
+    SandboxConnectBuilder, SandboxConnectOpts, SandboxCreateBuilder, SandboxCreateOpts,
+    SandboxInfo, SandboxLifecycle, SandboxListOpts, SandboxMetrics, SandboxNetworkUpdate,
+    SandboxPaginator, SandboxState, SandboxUrlOpts, SnapshotInfo, SnapshotListOpts,
+    SnapshotPaginator, WatchHandle, WatchOpts, WriteEntry, WriteInfo,
 };
 
 pub mod paginator;

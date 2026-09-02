@@ -8,10 +8,62 @@
 //! All operations are public associated functions on [`Template`].
 
 use crate::api::client::ApiClient;
+use crate::api::schema as api_schema;
 use crate::connection_config::{ConnectionConfig, ConnectionConfigOpts};
 use crate::errors::{Error, Result};
 use crate::template::builder::Template;
-use crate::template::types::{TemplateBuildStatusResponse, TemplateTag};
+use crate::template::types::{BuildStatus, TemplateBuildStatusResponse, TemplateTag};
+
+// ─── TemplateListItem ────────────────────────────────────────────────────────
+
+/// One template of the team as returned by [`Template::list`]
+/// (`GET /templates`).
+#[derive(Debug, Clone)]
+pub struct TemplateListItem {
+    /// Template identifier.
+    pub template_id: String,
+    /// Aliases of the template.
+    pub aliases: Vec<String>,
+    /// Names of the template (`namespace/alias` when namespaced).
+    pub names: Vec<String>,
+    /// Identifier of the last successful build.
+    pub build_id: String,
+    /// Status of the last build.
+    pub build_status: BuildStatus,
+    /// vCPU count of the template.
+    pub cpu_count: u32,
+    /// Memory in MB of the template.
+    pub memory_mb: u32,
+    /// Whether the template is public.
+    pub public: bool,
+}
+
+impl TemplateListItem {
+    /// Build a public [`TemplateListItem`] from the generated wire type.
+    fn from_wire(t: api_schema::Template) -> Self {
+        Self {
+            template_id: t.template_id,
+            aliases: t.aliases,
+            names: t.names,
+            build_id: t.build_id,
+            build_status: BuildStatus::from_wire(t.build_status),
+            cpu_count: t.cpu_count.0.get(),
+            memory_mb: u32::try_from(t.memory_mb.0).unwrap_or(0),
+            public: t.public,
+        }
+    }
+
+    /// Whether `name` is one of the aliases or names of the template. A
+    /// namespaced name matches on its last segment, so `team/app` matches
+    /// `app`.
+    pub fn has_name(&self, name: &str) -> bool {
+        self.aliases.iter().any(|a| a == name)
+            || self
+                .names
+                .iter()
+                .any(|n| n == name || n.rsplit('/').next() == Some(name))
+    }
+}
 
 // ─── TemplateApiOpts ─────────────────────────────────────────────────────────
 
@@ -150,6 +202,49 @@ impl Template {
             // — it exists, you just can't see it. Matches the JS SDK
             // (`checkAliasExists`: `if status === 403 return true`).
             Err(Error::Forbidden(_)) => Ok(true),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// List the templates of the team (`GET /templates`), including the build
+    /// status of each one. Use [`TemplateListItem::has_name`] to resolve an
+    /// alias to a template id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the API key is missing or invalid, or if the
+    /// server returns a non-2xx status.
+    pub async fn list(opts: TemplateApiOpts) -> Result<Vec<TemplateListItem>> {
+        let api = build_api_client(&opts)?;
+        let templates: Vec<api_schema::Template> = api
+            .request(reqwest::Method::GET, "/templates", &[], None)
+            .await?;
+        Ok(templates
+            .into_iter()
+            .map(TemplateListItem::from_wire)
+            .collect())
+    }
+
+    /// Delete a template by id or alias (`DELETE /templates/{id}`).
+    /// Returns `false` if the template was already gone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the API key is missing or invalid, or if the
+    /// server returns a status other than 2xx/404.
+    pub async fn delete(id_or_alias: &str, opts: TemplateApiOpts) -> Result<bool> {
+        let api = build_api_client(&opts)?;
+        match api
+            .request_unit(
+                reqwest::Method::DELETE,
+                &format!("/templates/{id_or_alias}"),
+                &[],
+                None,
+            )
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(Error::NotFound(_)) => Ok(false),
             Err(e) => Err(e),
         }
     }
@@ -426,6 +521,86 @@ mod tests {
         assert_eq!(resp.status, BuildStatus::Ready);
         assert_eq!(resp.template_id, "tpl_1");
         assert_eq!(resp.build_id, "bld_1");
+    }
+
+    // ── list / delete ─────────────────────────────────────────────────────────
+
+    fn template_json(id: &str, alias: &str, status: &str) -> serde_json::Value {
+        serde_json::json!({
+            "templateID": id,
+            "aliases": [alias],
+            "names": [format!("team/{alias}")],
+            "buildID": "bld_1",
+            "buildStatus": status,
+            "buildCount": 1,
+            "cpuCount": 2,
+            "memoryMB": 4096,
+            "diskSizeMB": 8192,
+            "envdVersion": "0.6.0",
+            "createdAt": "2026-06-30T10:00:00Z",
+            "updatedAt": "2026-06-30T10:00:00Z",
+            "lastSpawnedAt": "2026-06-30T10:00:00Z",
+            "createdBy": {"id": "00000000-0000-0000-0000-000000000000", "email": "a@b.c"},
+            "public": false,
+            "spawnCount": 0
+        })
+    }
+
+    /// `list` must map `GET /templates` into [`TemplateListItem`]s and
+    /// `has_name` must match aliases and namespaced names.
+    #[tokio::test]
+    async fn list_maps_templates_and_matches_names() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/templates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                template_json("tpl_1", "dc-v1-small", "ready"),
+                template_json("tpl_2", "dc-v1-large", "error"),
+            ])))
+            .mount(&server)
+            .await;
+
+        let items = Template::list(test_opts(&server))
+            .await
+            .expect("list must succeed");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].template_id, "tpl_1");
+        assert_eq!(items[0].build_status, BuildStatus::Ready);
+        assert_eq!(items[0].cpu_count, 2);
+        assert_eq!(items[0].memory_mb, 4096);
+        assert!(items[0].has_name("dc-v1-small"));
+        assert!(items[0].has_name("team/dc-v1-small"));
+        assert!(!items[0].has_name("dc-v1-large"));
+        assert_eq!(items[1].build_status, BuildStatus::Error);
+    }
+
+    /// `delete` must return `true` on 204 and `false` on 404.
+    #[tokio::test]
+    async fn delete_true_on_204_false_on_404() {
+        {
+            let server = MockServer::start().await;
+            Mock::given(method("DELETE"))
+                .and(path("/templates/dc-v1-small"))
+                .respond_with(ResponseTemplate::new(204))
+                .mount(&server)
+                .await;
+            let deleted = Template::delete("dc-v1-small", test_opts(&server))
+                .await
+                .expect("delete must succeed on 204");
+            assert!(deleted);
+        }
+        {
+            let server = MockServer::start().await;
+            Mock::given(method("DELETE"))
+                .and(path("/templates/gone"))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+            let deleted = Template::delete("gone", test_opts(&server))
+                .await
+                .expect("delete must succeed on 404");
+            assert!(!deleted);
+        }
     }
 
     // ── secret redaction ──────────────────────────────────────────────────────

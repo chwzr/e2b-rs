@@ -38,7 +38,7 @@ pub use log::{LogEntry, LogEntryLevel};
 pub use readycmd::{
     ReadyCmd, wait_for_file, wait_for_port, wait_for_process, wait_for_timeout, wait_for_url,
 };
-pub use tags::{TemplateApiOpts, TemplateTagInfo};
+pub use tags::{TemplateApiOpts, TemplateListItem, TemplateTagInfo};
 pub use types::{
     BuildInfo, BuildStatus, BuildStatusReason, CopyItem, Instruction, InstructionType,
     TemplateBuildStatusResponse, TemplateTag,

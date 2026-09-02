@@ -5,6 +5,7 @@ use crate::api::schema as api_schema;
 use crate::envd::versions::version_gte;
 use crate::errors::{Error, Result};
 use crate::sandbox::opts::SandboxCreateOpts;
+use crate::sandbox::types::OnTimeout;
 use crate::utils::timeout_to_seconds;
 use std::time::Duration;
 
@@ -55,6 +56,24 @@ pub(crate) async fn create_sandbox(
     }
     if !opts.envs.is_empty() {
         body["envVars"] = serde_json::to_value(&opts.envs).unwrap_or_default();
+    }
+    // Lifecycle maps to the `autoPause`, `autoPauseMemory`, and
+    // `autoResume.enabled` fields of `NewSandbox` (JS `lifecycle` option).
+    // `autoPauseMemory` defaults to true server-side and is only sent when
+    // the caller turns it off.
+    if let Some(lifecycle) = &opts.lifecycle {
+        match lifecycle.on_timeout {
+            OnTimeout::Kill => {
+                body["autoPause"] = serde_json::Value::Bool(false);
+            }
+            OnTimeout::Pause { keep_memory } => {
+                body["autoPause"] = serde_json::Value::Bool(true);
+                if !keep_memory {
+                    body["autoPauseMemory"] = serde_json::Value::Bool(false);
+                }
+            }
+        }
+        body["autoResume"] = serde_json::json!({ "enabled": lifecycle.auto_resume });
     }
 
     let sandbox: api_schema::Sandbox = api
@@ -317,6 +336,57 @@ mod tests {
             .await
             .expect_err("missing paused sandbox");
         assert!(matches!(err, Error::SandboxNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn create_sends_lifecycle_pause_and_auto_resume() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sandboxes"))
+            .and(body_partial_json(serde_json::json!({
+                "templateID": "base",
+                "autoPause": true,
+                "autoResume": {"enabled": true},
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(sandbox_json("sbx_lc", "0.6.0")))
+            .mount(&server)
+            .await;
+        let api = api_for(&server);
+        let opts = SandboxCreateOpts {
+            lifecycle: Some(crate::sandbox::types::SandboxLifecycle {
+                on_timeout: OnTimeout::Pause { keep_memory: true },
+                auto_resume: true,
+            }),
+            ..Default::default()
+        };
+        let sandbox = create_sandbox(&api, &opts).await.expect("create");
+        assert_eq!(sandbox.sandbox_id, "sbx_lc");
+    }
+
+    #[tokio::test]
+    async fn create_sends_lifecycle_kill_without_memory_flag() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sandboxes"))
+            .and(body_partial_json(serde_json::json!({
+                "autoPause": false,
+                "autoResume": {"enabled": false},
+            })))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(sandbox_json("sbx_kill", "0.6.0")),
+            )
+            .mount(&server)
+            .await;
+        let api = api_for(&server);
+        let opts = SandboxCreateOpts {
+            lifecycle: Some(crate::sandbox::types::SandboxLifecycle {
+                on_timeout: OnTimeout::Kill,
+                auto_resume: false,
+            }),
+            ..Default::default()
+        };
+        let sandbox = create_sandbox(&api, &opts).await.expect("create");
+        assert_eq!(sandbox.sandbox_id, "sbx_kill");
     }
 
     #[tokio::test]

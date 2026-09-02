@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::connection_config::ConnectionConfigOpts;
-use crate::sandbox::types::SandboxState;
+use crate::sandbox::types::{SandboxLifecycle, SandboxState};
 
 /// Options for [`Sandbox::create`](crate::Sandbox::create).
 #[derive(Default)]
@@ -13,6 +13,8 @@ pub struct SandboxCreateOpts {
     pub template: Option<String>,
     /// Sandbox lifetime (default 5 minutes).
     pub timeout: Option<Duration>,
+    /// Lifecycle policy: the action on timeout and auto-resume (default: kill).
+    pub lifecycle: Option<SandboxLifecycle>,
     /// Metadata key/values.
     pub metadata: BTreeMap<String, String>,
     /// Environment variables.
