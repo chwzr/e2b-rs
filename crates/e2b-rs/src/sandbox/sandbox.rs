@@ -377,6 +377,15 @@ impl SandboxCreateBuilder {
         self
     }
 
+    /// Set the base URL for envd traffic (filesystem, commands, PTY). The
+    /// sandbox id and the envd port travel in the `E2b-Sandbox-Id` and
+    /// `E2b-Sandbox-Port` headers, so one URL serves every sandbox. Use it
+    /// for a self-hosted proxy on plain HTTP (JS `sandboxUrl` option).
+    pub fn sandbox_url(mut self, url: impl Into<String>) -> Self {
+        self.opts.connection.sandbox_url = Some(url.into());
+        self
+    }
+
     /// Sandbox lifetime (default 5 minutes).
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.opts.timeout = Some(timeout);
@@ -488,6 +497,13 @@ impl SandboxConnectBuilder {
         self.opts.connection.domain = Some(domain.into());
         self
     }
+
+    /// Set the base URL for envd traffic. See
+    /// [`SandboxCreateBuilder::sandbox_url`].
+    pub fn sandbox_url(mut self, url: impl Into<String>) -> Self {
+        self.opts.connection.sandbox_url = Some(url.into());
+        self
+    }
 }
 
 impl IntoFuture for SandboxConnectBuilder {
@@ -520,6 +536,22 @@ mod tests {
             api_url: Some(server.uri()),
             ..Default::default()
         }
+    }
+
+    /// Both builders must carry the envd base URL into the connection
+    /// options.
+    #[test]
+    fn builders_set_the_sandbox_url() {
+        let create = Sandbox::create().sandbox_url("http://sandbox.internal");
+        assert_eq!(
+            create.opts.connection.sandbox_url.as_deref(),
+            Some("http://sandbox.internal")
+        );
+        let connect = Sandbox::connect("sbx_a").sandbox_url("http://sandbox.internal");
+        assert_eq!(
+            connect.opts.connection.sandbox_url.as_deref(),
+            Some("http://sandbox.internal")
+        );
     }
 
     /// `kill_by_id` must not call `/connect` and must map 404 to `false`.

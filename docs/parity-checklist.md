@@ -71,6 +71,7 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 | `Sandbox.create` | `Sandbox::create()` (IntoFuture builder) | ✅ |
 | `Sandbox.connect` | `Sandbox::connect(id)` (IntoFuture builder) | ✅ |
 | `Sandbox.create({ lifecycle })` | `SandboxCreateBuilder::lifecycle(SandboxLifecycle)` → `autoPause`, `autoPauseMemory`, `autoResume.enabled` | ✅ |
+| `Sandbox.create({ sandboxUrl })` / `Sandbox.connect(id, { sandboxUrl })` | `SandboxCreateBuilder::sandbox_url` / `SandboxConnectBuilder::sandbox_url` — one envd base URL, sandbox id and port in headers | ✅ |
 | `sandbox.kill` / `SandboxApi.kill` | `Sandbox::kill` | ✅ |
 | `Sandbox.kill(id)` (static) | `Sandbox::kill_by_id(id, ConnectionConfigOpts)` — no `/connect`, so a paused sandbox stays paused | ✅ |
 | `sandbox.getInfo` | `Sandbox::get_info` → `SandboxInfo` (with `lifecycle`) | ✅ |
