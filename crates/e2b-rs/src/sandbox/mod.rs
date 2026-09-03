@@ -37,4 +37,6 @@ pub use paginator::SandboxPaginator;
 pub use pty::{Pty, PtyCreateOpts, PtySize};
 pub use sandbox::{Sandbox, SandboxConnectBuilder, SandboxCreateBuilder};
 pub use snapshot_paginator::SnapshotPaginator;
-pub use types::{SandboxInfo, SandboxMetrics, SandboxState, SnapshotInfo};
+pub use types::{
+    OnTimeout, SandboxInfo, SandboxLifecycle, SandboxMetrics, SandboxState, SnapshotInfo,
+};

@@ -13,6 +13,40 @@ pub enum SandboxState {
     Paused,
 }
 
+/// The action the control plane takes when a sandbox reaches its timeout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnTimeout {
+    /// Kill the sandbox.
+    Kill,
+    /// Pause the sandbox so it can be resumed later.
+    Pause {
+        /// Keep the memory snapshot in the pause (`autoPauseMemory`).
+        keep_memory: bool,
+    },
+}
+
+/// The lifecycle policy of a sandbox (JS `lifecycle: { onTimeout, autoResume }`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SandboxLifecycle {
+    /// The action on timeout.
+    pub on_timeout: OnTimeout,
+    /// Whether the sandbox proxy resumes a paused sandbox on traffic.
+    pub auto_resume: bool,
+}
+
+impl SandboxLifecycle {
+    /// Build a public [`SandboxLifecycle`] from the generated control-plane type.
+    pub(crate) fn from_wire(w: api_schema::SandboxLifecycle) -> Self {
+        Self {
+            on_timeout: match w.on_timeout {
+                api_schema::SandboxOnTimeout::Kill => OnTimeout::Kill,
+                api_schema::SandboxOnTimeout::Pause => OnTimeout::Pause { keep_memory: true },
+            },
+            auto_resume: w.auto_resume,
+        }
+    }
+}
+
 /// Metadata and runtime details about a sandbox.
 #[derive(Debug, Clone)]
 pub struct SandboxInfo {
@@ -40,6 +74,8 @@ pub struct SandboxInfo {
     pub allow_internet_access: Option<bool>,
     /// Base domain serving this sandbox's traffic.
     pub sandbox_domain: Option<String>,
+    /// The lifecycle policy, when the control plane reports it.
+    pub lifecycle: Option<SandboxLifecycle>,
 }
 
 impl SandboxInfo {
@@ -65,6 +101,7 @@ impl SandboxInfo {
             envd_version: d.envd_version.0,
             allow_internet_access: d.allow_internet_access,
             sandbox_domain: d.domain,
+            lifecycle: d.lifecycle.map(SandboxLifecycle::from_wire),
         }
     }
 }

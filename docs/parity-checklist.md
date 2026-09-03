@@ -70,8 +70,12 @@ Transports (ApiClient/EnvdApiClient/Connect client) consume these in Plan 2b.
 |---|---|---|
 | `Sandbox.create` | `Sandbox::create()` (IntoFuture builder) | ✅ |
 | `Sandbox.connect` | `Sandbox::connect(id)` (IntoFuture builder) | ✅ |
+| `Sandbox.create({ lifecycle })` | `SandboxCreateBuilder::lifecycle(SandboxLifecycle)` → `autoPause`, `autoPauseMemory`, `autoResume.enabled` | ✅ |
+| `Sandbox.create({ sandboxUrl })` / `Sandbox.connect(id, { sandboxUrl })` | `SandboxCreateBuilder::sandbox_url` / `SandboxConnectBuilder::sandbox_url` — one envd base URL, sandbox id and port in headers | ✅ |
 | `sandbox.kill` / `SandboxApi.kill` | `Sandbox::kill` | ✅ |
-| `sandbox.getInfo` | `Sandbox::get_info` → `SandboxInfo` | ✅ |
+| `Sandbox.kill(id)` (static) | `Sandbox::kill_by_id(id, ConnectionConfigOpts)` — no `/connect`, so a paused sandbox stays paused | ✅ |
+| `sandbox.getInfo` | `Sandbox::get_info` → `SandboxInfo` (with `lifecycle`) | ✅ |
+| `Sandbox.getInfo(id)` (static) | `Sandbox::get_info_by_id(id, ConnectionConfigOpts)` — no `/connect` | ✅ |
 | `sandbox.setTimeout` | `Sandbox::set_timeout` | ✅ |
 | `sandbox.getHost` | `Sandbox::get_host` | ✅ |
 | `sandbox.isRunning` | `Sandbox::is_running` (control-plane state; envd `/health` in 3b) | 🔶 |
@@ -258,6 +262,8 @@ builder methods (Plan 5d). No public API is introduced in this plan.
 | `RegistryConfig` (AWS/GCP/generic) | `RegistryConfig::{Aws, Gcp, General}` — serialises to `FromImageRegistry` wire enum internally | ✅ |
 | `assignTags` / `removeTags` / `getTags` | `Template::assign_tags` / `remove_tags` / `get_tags` → `Vec<TemplateTag>` | ✅ |
 | `exists` / `aliasExists` (403 → true) | `Template::exists` / `alias_exists` — 200→`Ok(true)`, 404→`Ok(false)`, 403→`Ok(true)` (matches JS) | ✅ |
+| `GET /templates` (CLI `template list`) | `Template::list(TemplateApiOpts)` → `Vec<TemplateListItem>` with build status; `has_name` resolves an alias | ✅ |
+| `DELETE /templates/{id}` (CLI `template delete`) | `Template::delete(id_or_alias, TemplateApiOpts)` — 404→`Ok(false)` | ✅ |
 | `getBuildStatus` | `Template::get_build_status` → `TemplateBuildStatusResponse` | ✅ |
 
 **Notes:**
@@ -283,6 +289,7 @@ builder methods (Plan 5d). No public API is introduced in this plan.
 | `fromBunImage(variant)` | `from_bun_image(variant)` | | ✅ |
 | `fromAwsRegistry(image, keyId, secret, region)` | `from_aws_registry(image, access_key_id, secret_access_key, region)` | Credentials excluded from `Debug` | ✅ |
 | `fromGcpRegistry(image, saJson)` | `from_gcp_registry(image, service_account_json)` | Credentials excluded from `Debug` | ✅ |
+| `fromImage(image, { username, password })` | `from_registry_image(image, username, password)` | `RegistryConfig::General`; password excluded from `Debug` | ✅ |
 | `copy(src, dest, opts)` | `copy(src, dest, CopyOpts)` → `Result<Template>` | Validates relative path; args = `[src, dest, user, mode_octal]` | ✅ |
 | `copyItems(items)` | `copy_items(Vec<CopyItem>)` → `Result<Template>` | Per-item relative-path validation | ✅ |
 | `remove(paths, opts)` | `remove(&[&str], RemoveOpts)` → `Template` | Builds `rm [-r] [-f] <quoted-paths>` | ✅ |

@@ -605,6 +605,31 @@ impl Template {
         self
     }
 
+    /// Use an image from a private registry with a username and a password as
+    /// the base for this template (JS `fromImage(image, { username, password })`).
+    ///
+    /// Sets `base_image` to `image`, clears any previously set `base_template`,
+    /// and stores the credentials as [`RegistryConfig::General`]. The password
+    /// is never logged in plaintext (see [`RegistryConfig`]'s `Debug`
+    /// implementation).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use e2b_rs::template::Template;
+    /// let t = Template::new()
+    ///     .from_registry_image("registry.example.com/team/app:1.0", "robot", "s3cret");
+    /// ```
+    pub fn from_registry_image(mut self, image: &str, username: &str, password: &str) -> Self {
+        self.base_image = Some(image.to_string());
+        self.base_template = None;
+        self.registry_config = Some(RegistryConfig::General {
+            username: username.to_string(),
+            password: password.to_string(),
+        });
+        self
+    }
+
     /// Use an image from Google Container Registry or Artifact Registry as the
     /// base for this template.
     ///
@@ -2081,6 +2106,27 @@ CMD npm start
                 assert_eq!(region, "us-east-1");
             }
             other => panic!("expected RegistryConfig::Aws, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_registry_image_sets_general_config() {
+        let t = Template::new().from_registry_image(
+            "registry.example.com/team/app:1.0",
+            "robot",
+            "s3cret",
+        );
+        assert_eq!(
+            t.base_image.as_deref(),
+            Some("registry.example.com/team/app:1.0")
+        );
+        assert_eq!(t.base_template, None);
+        match t.registry_config {
+            Some(RegistryConfig::General { username, password }) => {
+                assert_eq!(username, "robot");
+                assert_eq!(password, "s3cret");
+            }
+            other => panic!("expected General registry config, got {other:?}"),
         }
     }
 

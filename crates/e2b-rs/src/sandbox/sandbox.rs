@@ -88,9 +88,34 @@ impl Sandbox {
         api::kill_sandbox(&self.api, &self.sandbox_id).await
     }
 
+    /// Kill a sandbox by id without a connect call (JS static `Sandbox.kill(id)`).
+    /// A connect call resumes a paused sandbox; this call does not.
+    /// Returns `false` if the sandbox was already gone.
+    pub async fn kill_by_id(
+        sandbox_id: impl Into<String>,
+        connection: crate::connection_config::ConnectionConfigOpts,
+    ) -> Result<bool> {
+        let config = ConnectionConfig::new(connection);
+        let api = ApiClient::new(&config, true)?;
+        api::kill_sandbox(&api, &sandbox_id.into()).await
+    }
+
     /// Fetch current sandbox info.
     pub async fn get_info(&self) -> Result<SandboxInfo> {
         let detail = api::get_sandbox_info(&self.api, &self.sandbox_id).await?;
+        Ok(SandboxInfo::from_detail(detail))
+    }
+
+    /// Fetch the info of a sandbox by id without a connect call (JS static
+    /// `Sandbox.getInfo(id)`). A connect call resumes a paused sandbox; this
+    /// call does not. A missing sandbox is [`Error::SandboxNotFound`].
+    pub async fn get_info_by_id(
+        sandbox_id: impl Into<String>,
+        connection: crate::connection_config::ConnectionConfigOpts,
+    ) -> Result<SandboxInfo> {
+        let config = ConnectionConfig::new(connection);
+        let api = ApiClient::new(&config, true)?;
+        let detail = api::get_sandbox_info(&api, &sandbox_id.into()).await?;
         Ok(SandboxInfo::from_detail(detail))
     }
 
@@ -345,6 +370,22 @@ impl SandboxCreateBuilder {
         self
     }
 
+    /// Set the lifecycle policy: the action on timeout and auto-resume
+    /// (JS `lifecycle: { onTimeout, autoResume }`).
+    pub fn lifecycle(mut self, lifecycle: crate::sandbox::types::SandboxLifecycle) -> Self {
+        self.opts.lifecycle = Some(lifecycle);
+        self
+    }
+
+    /// Set the base URL for envd traffic (filesystem, commands, PTY). The
+    /// sandbox id and the envd port travel in the `E2b-Sandbox-Id` and
+    /// `E2b-Sandbox-Port` headers, so one URL serves every sandbox. Use it
+    /// for a self-hosted proxy on plain HTTP (JS `sandboxUrl` option).
+    pub fn sandbox_url(mut self, url: impl Into<String>) -> Self {
+        self.opts.connection.sandbox_url = Some(url.into());
+        self
+    }
+
     /// Sandbox lifetime (default 5 minutes).
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.opts.timeout = Some(timeout);
@@ -456,6 +497,13 @@ impl SandboxConnectBuilder {
         self.opts.connection.domain = Some(domain.into());
         self
     }
+
+    /// Set the base URL for envd traffic. See
+    /// [`SandboxCreateBuilder::sandbox_url`].
+    pub fn sandbox_url(mut self, url: impl Into<String>) -> Self {
+        self.opts.connection.sandbox_url = Some(url.into());
+        self
+    }
 }
 
 impl IntoFuture for SandboxConnectBuilder {
@@ -481,6 +529,104 @@ mod tests {
     use std::time::Duration;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn server_opts(server: &MockServer) -> crate::connection_config::ConnectionConfigOpts {
+        crate::connection_config::ConnectionConfigOpts {
+            api_key: Some("e2b_0123456789abcdef".to_string()),
+            api_url: Some(server.uri()),
+            ..Default::default()
+        }
+    }
+
+    /// Both builders must carry the envd base URL into the connection
+    /// options.
+    #[test]
+    fn builders_set_the_sandbox_url() {
+        let create = Sandbox::create().sandbox_url("http://sandbox.internal");
+        assert_eq!(
+            create.opts.connection.sandbox_url.as_deref(),
+            Some("http://sandbox.internal")
+        );
+        let connect = Sandbox::connect("sbx_a").sandbox_url("http://sandbox.internal");
+        assert_eq!(
+            connect.opts.connection.sandbox_url.as_deref(),
+            Some("http://sandbox.internal")
+        );
+    }
+
+    /// `kill_by_id` must not call `/connect` and must map 404 to `false`.
+    #[tokio::test]
+    async fn kill_by_id_skips_connect_and_maps_404() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/sandboxes/sbx_a"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/sandboxes/sbx_gone"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        assert!(
+            Sandbox::kill_by_id("sbx_a", server_opts(&server))
+                .await
+                .expect("kill")
+        );
+        assert!(
+            !Sandbox::kill_by_id("sbx_gone", server_opts(&server))
+                .await
+                .expect("kill")
+        );
+        let connects = server
+            .received_requests()
+            .await
+            .expect("requests")
+            .iter()
+            .filter(|r| r.url.path().ends_with("/connect"))
+            .count();
+        assert_eq!(connects, 0);
+    }
+
+    /// `get_info_by_id` must read `GET /sandboxes/{id}` with the lifecycle
+    /// and must map 404 to `SandboxNotFound`.
+    #[tokio::test]
+    async fn get_info_by_id_reads_detail_with_lifecycle() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/sandboxes/sbx_a"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sandboxID": "sbx_a", "templateID": "base", "clientID": "c1",
+                "cpuCount": 2, "memoryMB": 1024, "diskSizeMB": 1024,
+                "envdVersion": "0.6.0", "state": "paused",
+                "startedAt": "2026-06-30T10:00:00Z", "endAt": "2026-06-30T10:05:00Z",
+                "metadata": {"k": "v"},
+                "lifecycle": {"autoResume": true, "onTimeout": "pause"}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/sandboxes/sbx_gone"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let info = Sandbox::get_info_by_id("sbx_a", server_opts(&server))
+            .await
+            .expect("info");
+        assert_eq!(info.sandbox_id, "sbx_a");
+        assert!(matches!(info.state, SandboxState::Paused));
+        assert_eq!(
+            info.lifecycle,
+            Some(crate::sandbox::types::SandboxLifecycle {
+                on_timeout: crate::sandbox::types::OnTimeout::Pause { keep_memory: true },
+                auto_resume: true,
+            })
+        );
+        let err = Sandbox::get_info_by_id("sbx_gone", server_opts(&server))
+            .await
+            .expect_err("missing sandbox");
+        assert!(matches!(err, Error::SandboxNotFound(_)));
+    }
 
     fn local_sandbox(token: Option<&str>) -> Sandbox {
         let config = crate::connection_config::ConnectionConfig::new(
