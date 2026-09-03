@@ -16,6 +16,31 @@ use crate::template::types::{BuildStatus, TemplateBuildStatusResponse, TemplateT
 
 // ─── TemplateListItem ────────────────────────────────────────────────────────
 
+/// One row of `GET /templates` as the API sends it. The generated
+/// [`api_schema::Template`] rejects the row of a failed build, because the
+/// API returns `cpuCount: 0`, `memoryMB: 0`, and `createdBy: null` for it.
+/// This type reads the fields that [`TemplateListItem`] needs with lenient
+/// types, so one broken row does not fail the whole list.
+#[derive(Debug, serde::Deserialize)]
+struct TemplateRow {
+    #[serde(rename = "templateID")]
+    template_id: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(default)]
+    names: Vec<String>,
+    #[serde(rename = "buildID", default)]
+    build_id: String,
+    #[serde(rename = "buildStatus")]
+    build_status: api_schema::TemplateBuildStatus,
+    #[serde(rename = "cpuCount", default)]
+    cpu_count: u32,
+    #[serde(rename = "memoryMB", default)]
+    memory_mb: i64,
+    #[serde(default)]
+    public: bool,
+}
+
 /// One template of the team as returned by [`Template::list`]
 /// (`GET /templates`).
 #[derive(Debug, Clone)]
@@ -39,16 +64,16 @@ pub struct TemplateListItem {
 }
 
 impl TemplateListItem {
-    /// Build a public [`TemplateListItem`] from the generated wire type.
-    fn from_wire(t: api_schema::Template) -> Self {
+    /// Build a public [`TemplateListItem`] from one wire row.
+    fn from_wire(t: TemplateRow) -> Self {
         Self {
             template_id: t.template_id,
             aliases: t.aliases,
             names: t.names,
             build_id: t.build_id,
             build_status: BuildStatus::from_wire(t.build_status),
-            cpu_count: t.cpu_count.0.get(),
-            memory_mb: u32::try_from(t.memory_mb.0).unwrap_or(0),
+            cpu_count: t.cpu_count,
+            memory_mb: u32::try_from(t.memory_mb).unwrap_or(0),
             public: t.public,
         }
     }
@@ -216,7 +241,7 @@ impl Template {
     /// server returns a non-2xx status.
     pub async fn list(opts: TemplateApiOpts) -> Result<Vec<TemplateListItem>> {
         let api = build_api_client(&opts)?;
-        let templates: Vec<api_schema::Template> = api
+        let templates: Vec<TemplateRow> = api
             .request(reqwest::Method::GET, "/templates", &[], None)
             .await?;
         Ok(templates
@@ -574,15 +599,18 @@ mod tests {
         assert_eq!(items[1].build_status, BuildStatus::Error);
     }
 
-    /// `list` must accept `null` for `createdBy` and `lastSpawnedAt`. The API
-    /// returns `null` for a template that an API key created and that no
-    /// sandbox used yet.
+    /// `list` must accept the row of a failed build. The API returns `null`
+    /// for `createdBy` and `lastSpawnedAt`, and `0` for `cpuCount` and
+    /// `memoryMB`, when the build never started.
     #[tokio::test]
-    async fn list_accepts_null_created_by_and_last_spawned_at() {
+    async fn list_accepts_the_row_of_a_failed_build() {
         let server = MockServer::start().await;
         let mut item = template_json("tpl_1", "dc-v1-small", "ready");
         item["createdBy"] = serde_json::Value::Null;
         item["lastSpawnedAt"] = serde_json::Value::Null;
+        item["cpuCount"] = serde_json::json!(0);
+        item["memoryMB"] = serde_json::json!(0);
+        item["buildStatus"] = serde_json::json!("error");
         Mock::given(method("GET"))
             .and(path("/templates"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([item])))
@@ -591,9 +619,12 @@ mod tests {
 
         let items = Template::list(test_opts(&server))
             .await
-            .expect("list must accept null fields");
+            .expect("list must accept the row of a failed build");
         assert_eq!(items.len(), 1);
         assert!(items[0].has_name("dc-v1-small"));
+        assert_eq!(items[0].cpu_count, 0);
+        assert_eq!(items[0].memory_mb, 0);
+        assert_eq!(items[0].build_status, BuildStatus::Error);
     }
 
     /// `delete` must return `true` on 204 and `false` on 404.
