@@ -4213,14 +4213,14 @@ pub struct Template {
     #[serde(rename = "createdAt")]
     pub created_at: ::chrono::DateTime<::chrono::offset::Utc>,
     #[serde(rename = "createdBy")]
-    pub created_by: TeamUser,
+    pub created_by: ::std::option::Option<TeamUser>,
     #[serde(rename = "diskSizeMB")]
     pub disk_size_mb: DiskSizeMb,
     #[serde(rename = "envdVersion")]
     pub envd_version: EnvdVersion,
     #[doc = "Time when the template was last used"]
     #[serde(rename = "lastSpawnedAt")]
-    pub last_spawned_at: ::chrono::DateTime<::chrono::offset::Utc>,
+    pub last_spawned_at: ::std::option::Option<::chrono::DateTime<::chrono::offset::Utc>>,
     #[serde(rename = "memoryMB")]
     pub memory_mb: MemoryMb,
     #[doc = "Names of the template (namespace/alias format when namespaced)"]
@@ -5041,14 +5041,14 @@ pub struct TemplateLegacy {
     #[serde(rename = "createdAt")]
     pub created_at: ::chrono::DateTime<::chrono::offset::Utc>,
     #[serde(rename = "createdBy")]
-    pub created_by: TeamUser,
+    pub created_by: ::std::option::Option<TeamUser>,
     #[serde(rename = "diskSizeMB")]
     pub disk_size_mb: DiskSizeMb,
     #[serde(rename = "envdVersion")]
     pub envd_version: EnvdVersion,
     #[doc = "Time when the template was last used"]
     #[serde(rename = "lastSpawnedAt")]
-    pub last_spawned_at: ::chrono::DateTime<::chrono::offset::Utc>,
+    pub last_spawned_at: ::std::option::Option<::chrono::DateTime<::chrono::offset::Utc>>,
     #[serde(rename = "memoryMB")]
     pub memory_mb: MemoryMb,
     #[doc = "Whether the template is public or only accessible by the team"]
@@ -5397,7 +5397,7 @@ pub struct TemplateWithBuilds {
     pub created_at: ::chrono::DateTime<::chrono::offset::Utc>,
     #[doc = "Time when the template was last used"]
     #[serde(rename = "lastSpawnedAt")]
-    pub last_spawned_at: ::chrono::DateTime<::chrono::offset::Utc>,
+    pub last_spawned_at: ::std::option::Option<::chrono::DateTime<::chrono::offset::Utc>>,
     #[doc = "Names of the template (namespace/alias format when namespaced)"]
     pub names: ::std::vec::Vec<::std::string::String>,
     #[doc = "Whether the template is public or only accessible by the team"]

@@ -574,6 +574,28 @@ mod tests {
         assert_eq!(items[1].build_status, BuildStatus::Error);
     }
 
+    /// `list` must accept `null` for `createdBy` and `lastSpawnedAt`. The API
+    /// returns `null` for a template that an API key created and that no
+    /// sandbox used yet.
+    #[tokio::test]
+    async fn list_accepts_null_created_by_and_last_spawned_at() {
+        let server = MockServer::start().await;
+        let mut item = template_json("tpl_1", "dc-v1-small", "ready");
+        item["createdBy"] = serde_json::Value::Null;
+        item["lastSpawnedAt"] = serde_json::Value::Null;
+        Mock::given(method("GET"))
+            .and(path("/templates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([item])))
+            .mount(&server)
+            .await;
+
+        let items = Template::list(test_opts(&server))
+            .await
+            .expect("list must accept null fields");
+        assert_eq!(items.len(), 1);
+        assert!(items[0].has_name("dc-v1-small"));
+    }
+
     /// `delete` must return `true` on 204 and `false` on 404.
     #[tokio::test]
     async fn delete_true_on_204_false_on_404() {

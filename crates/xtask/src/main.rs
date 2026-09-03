@@ -1,4 +1,5 @@
-//! Codegen driver for e2b-rs. Run with `cargo xtask codegen`.
+//! Codegen driver for e2b-rs. Run with `cargo xtask codegen`, or with
+//! `cargo xtask codegen-api` to regenerate the control-plane API types only.
 //!
 //! Generation modules are added in later tasks; this skeleton dispatches the
 //! `codegen` subcommand and fails loudly on unknown input.
@@ -34,8 +35,19 @@ fn main() -> anyhow::Result<()> {
             println!("xtask codegen: wrote envd REST types");
             Ok(())
         }
+        Some("codegen-api") => {
+            let spec_dir = std::path::PathBuf::from(
+                std::env::var("E2B_SPEC_DIR").unwrap_or_else(|_| "../E2B/spec".to_string()),
+            );
+            openapi::generate_schema_types(
+                &spec_dir.join("openapi.yml"),
+                &std::path::PathBuf::from("crates/e2b-rs/src/api/schema.rs"),
+            )?;
+            println!("xtask codegen-api: wrote control-plane API types");
+            Ok(())
+        }
         other => Err(anyhow::anyhow!(
-            "unknown xtask command: {other:?} (expected `codegen`)"
+            "unknown xtask command: {other:?} (expected `codegen` or `codegen-api`)"
         )),
     }
 }
